@@ -15,6 +15,72 @@
  */
 import { ROOM_PHASE, BID_STATUS } from '../network/RoomState.js';
 
+/**
+ * 複製房間邀請連結 (支援現代 Clipboard API 與相容回退 execCommand)
+ * @param {string} roomId 房間代碼
+ * @param {object} [opts]
+ * @param {(msg: string, type?: string) => void} [opts.showToast] 自訂 Toast 回呼
+ */
+export async function copyRoomInviteLink(roomId, { showToast = null } = {}) {
+  if (typeof window === 'undefined') return '';
+  const url = new URL(window.location.href);
+  url.search = ''; // 清除 query
+  url.hash = `room=${roomId}`;
+  const textToCopy = url.toString();
+
+  let success = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      success = true;
+    } catch (err) {
+      console.warn('Clipboard API failed, fallback to execCommand', err);
+    }
+  }
+
+  // Fallback 機制
+  if (!success && typeof document !== 'undefined') {
+    const textArea = document.createElement('textarea');
+    textArea.value = textToCopy;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      success = document.execCommand('copy');
+    } catch (err) {
+      console.error('Fallback copy failed', err);
+    }
+    textArea.remove();
+  }
+
+  // 視覺回饋提示 (Toast)
+  const toastFn =
+    typeof showToast === 'function'
+      ? showToast
+      : (msg) => {
+          if (typeof document === 'undefined') return;
+          const el = document.getElementById('toast');
+          if (el) {
+            el.textContent = msg;
+            el.className = 'toast show success';
+            setTimeout(() => el.classList.remove('show'), 2600);
+          }
+        };
+
+  if (success) {
+    toastFn(`已複製邀請連結：${textToCopy}`);
+  } else {
+    if (typeof prompt === 'function') {
+      prompt('請手動複製連結：', textToCopy);
+    }
+  }
+
+  return textToCopy;
+}
+
 export class MultiplayerHUD {
   /**
    * @param {object} opts
@@ -33,6 +99,7 @@ export class MultiplayerHUD {
     this._timerInterval = null;
     this._countdownEnd = null;
     this._totalSeconds = 120;
+    this._toastTimer = null;
 
     this.myPersonalBest = null;
 
@@ -77,7 +144,7 @@ export class MultiplayerHUD {
         <div id="mp-room-card" class="card mp-card" hidden>
           <div class="room-header">
             <div>
-              <span class="room-title">房間：<strong id="mp-room-title">---</strong></span>
+              <span class="room-title">房間：<strong id="mp-room-title" class="room-title-code">---</strong></span>
               <span id="mp-net-badge" class="badge">廣播頻道</span>
               <span id="mp-variant-badge" class="badge" style="background: #455a64; color: #eceff1; display: none;">⚪ 白機器人</span>
             </div>
@@ -98,7 +165,7 @@ export class MultiplayerHUD {
           <div id="mp-waiting-room" class="waiting-room-wrap">
             <div class="lobby-code-card">
               <div class="lobby-code-sub">房間代碼</div>
-              <div class="lobby-code-huge" id="mp-waiting-room-code">----</div>
+              <div class="lobby-code-huge room-code-display" id="lobby-room-code" data-id="mp-waiting-room-code">----</div>
               <div class="lobby-code-actions">
                 <button type="button" id="btn-lobby-copy-link" class="btn-sm primary">📋 複製邀請連結</button>
               </div>
@@ -232,7 +299,10 @@ export class MultiplayerHUD {
 
     // 等待室元件
     this.waitingRoom = this.container.querySelector('#mp-waiting-room');
-    this.waitingRoomCode = this.container.querySelector('#mp-waiting-room-code');
+    this.waitingRoomCode =
+      this.container.querySelector('#lobby-room-code') ||
+      this.container.querySelector('#mp-waiting-room-code') ||
+      this.container.querySelector('.room-code-display');
     this.lobbyHostVariant = this.container.querySelector('#mp-lobby-host-variant');
     this.lobbyUseSilver = this.container.querySelector('#mp-lobby-use-silver');
     this.lobbyGuestVariant = this.container.querySelector('#mp-lobby-guest-variant');
@@ -290,7 +360,10 @@ export class MultiplayerHUD {
     });
 
     // 複製邀請連結 (頂部按鈕與大廳卡片按鈕)
-    const copyLinkHandler = () => this._copyInviteLink();
+    const copyLinkHandler = (e) => {
+      e?.preventDefault?.();
+      this.copyRoomInviteLink();
+    };
     this.container.querySelector('#btn-copy-link')?.addEventListener('click', copyLinkHandler);
     this.container.querySelector('#btn-lobby-copy-link')?.addEventListener('click', copyLinkHandler);
 
@@ -402,17 +475,55 @@ export class MultiplayerHUD {
     }
   }
 
+  _showToast(msg, type = 'info') {
+    if (typeof this.h?.showToast === 'function') {
+      this.h.showToast(msg, type);
+      return;
+    }
+    if (typeof document !== 'undefined') {
+      const el = document.getElementById('toast');
+      if (el) {
+        clearTimeout(this._toastTimer);
+        el.textContent = msg;
+        el.className = `toast show ${type}`;
+        this._toastTimer = setTimeout(() => {
+          el.classList.remove('show');
+        }, 2600);
+      }
+    }
+  }
+
+  _getEffectiveRoomId() {
+    const fromLobby = this.container.querySelector('#lobby-room-code')?.textContent?.trim();
+    const fromMp = this.container.querySelector('#mp-waiting-room-code')?.textContent?.trim();
+    const fromDisplay = this.container.querySelector('.room-code-display')?.textContent?.trim();
+    const fromTitle = this.roomTitle?.textContent?.trim();
+    const fromInput = this.inputRoom?.value?.trim();
+    const code =
+      this.roomInfo?.roomId ||
+      fromLobby ||
+      fromMp ||
+      fromDisplay ||
+      fromTitle ||
+      fromInput ||
+      '';
+    if (code === '----' || code === '---') return '';
+    return code;
+  }
+
+  async copyRoomInviteLink(roomId = null) {
+    const code = roomId || this._getEffectiveRoomId();
+    if (!code) {
+      this._showToast('請先建立或加入房間', 'warn');
+      return '';
+    }
+    return copyRoomInviteLink(code, {
+      showToast: (msg) => this._showToast(msg, 'success'),
+    });
+  }
+
   _copyInviteLink() {
-    if (!this.roomInfo?.roomId) return;
-    const url = `${window.location.origin}${window.location.pathname}#room=${this.roomInfo.roomId}`;
-    navigator.clipboard
-      ?.writeText(url)
-      .then(() => {
-        alert('已複製房間邀請連結：' + url);
-      })
-      .catch(() => {
-        prompt('請複製房間網址：', url);
-      });
+    return this.copyRoomInviteLink();
   }
 
   // ---------- 對外控制方法 ----------
@@ -421,6 +532,29 @@ export class MultiplayerHUD {
     this.currentMode = mode;
     const isMulti = mode === 'multi';
     this.mpSection.hidden = !isMulti;
+  }
+
+  setRoomCode(code) {
+    const val = code ? String(code) : '';
+    if (this.roomTitle) this.roomTitle.textContent = val || '---';
+    const elements = this.container.querySelectorAll(
+      '#lobby-room-code, #mp-waiting-room-code, .room-code-display'
+    );
+    elements.forEach((el) => {
+      el.textContent = val || '----';
+    });
+  }
+
+  updateLobbyInfo(info) {
+    if (!info) return;
+    if (info.roomId) {
+      if (!this.roomInfo) this.roomInfo = {};
+      this.roomInfo.roomId = String(info.roomId);
+      this.setRoomCode(info.roomId);
+    }
+    if (info.useSilver !== undefined) {
+      this.setVariant(Boolean(info.useSilver));
+    }
   }
 
   setInRoom(inRoom, info = null) {
@@ -432,14 +566,16 @@ export class MultiplayerHUD {
     this.roomCard.hidden = !inRoom;
 
     if (inRoom && info) {
-      this.roomTitle.textContent = info.roomId;
-      if (this.waitingRoomCode) this.waitingRoomCode.textContent = info.roomId;
-      this.netBadge.textContent = info.mode.includes('Supabase') ? '☁ Supabase' : '⚡ 本地分頁廣播';
+      const code = info.roomId ? String(info.roomId) : '';
+      this.setRoomCode(code);
+      this.netBadge.textContent =
+        info.mode && info.mode.includes('Supabase') ? '☁ Supabase' : '⚡ 本地分頁廣播';
       this.setVariant(Boolean(info.useSilver));
-      if (history.replaceState) {
-        history.replaceState(null, '', `#room=${info.roomId}`);
+      if (history.replaceState && code) {
+        history.replaceState(null, '', `#room=${code}`);
       }
     } else {
+      this.setRoomCode('');
       this.setVariant(false);
       this.stopTimer();
       if (history.replaceState) {
@@ -463,6 +599,7 @@ export class MultiplayerHUD {
 
   updatePlayers(players = [], isHost = false) {
     if (this.roomInfo) this.roomInfo.isHost = isHost;
+    if (this.roomInfo?.roomId) this.setRoomCode(this.roomInfo.roomId);
     this.playerCount.textContent = String(players.length);
     this.playerChips.innerHTML = '';
     players.forEach((p) => {
@@ -509,6 +646,7 @@ export class MultiplayerHUD {
   updatePhase(phase, phaseData = {}) {
     this.currentPhase = phase;
     this.phaseBanner.className = 'phase-banner';
+    if (this.roomInfo?.roomId) this.setRoomCode(this.roomInfo.roomId);
 
     if (phase === ROOM_PHASE.LOBBY) {
       if (this.waitingRoom) this.waitingRoom.style.display = 'block';

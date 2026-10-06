@@ -143,10 +143,10 @@ export class RoomManager {
   }
 
   async _connect(roomId, userName) {
+    await this.leaveRoom();
+
     this.roomId = String(roomId).trim();
     if (userName && userName.trim()) this.userName = userName.trim();
-
-    await this.leaveRoom();
 
     const config = getSupabaseConfig();
     if (config) {

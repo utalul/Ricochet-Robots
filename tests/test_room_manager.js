@@ -3,6 +3,7 @@
  * 執行：node tests/test_room_manager.js
  */
 import { RoomManager, MSG_TYPE, NETWORK_MODE } from '../src/network/RoomManager.js';
+import { copyRoomInviteLink } from '../src/ui/MultiplayerHUD.js';
 
 let passed = 0;
 let failed = 0;
@@ -48,13 +49,17 @@ async function runTest() {
   });
 
   // Client A 建立房間
-  await clientA.createRoom(roomId, 'Alice');
+  const infoA = await clientA.createRoom(roomId, 'Alice');
   assert(clientA.isHost === true, 'Client A 為房主');
+  assert(clientA.roomId === roomId, 'Client A 記錄正確 roomId');
+  assert(infoA.roomId === roomId, 'createRoom 回傳正確 roomId');
   assert(clientA.mode === NETWORK_MODE.BROADCAST_CHANNEL, '預設使用 BroadcastChannel 雙開模擬');
 
   // Client B 加入房間
-  await clientB.joinRoom(roomId, 'Bob');
+  const infoB = await clientB.joinRoom(roomId, 'Bob');
   assert(clientB.isHost === false, 'Client B 為一般玩家');
+  assert(clientB.roomId === roomId, 'Client B 記錄正確 roomId');
+  assert(infoB.roomId === roomId, 'joinRoom 回傳正確 roomId');
 
   await sleep(60);
 
@@ -143,8 +148,13 @@ async function runTest() {
     playerReceivedLobbyUpdate = data;
   });
 
-  await lobbyHost.createRoom(lobbyRoomId, 'HostAlice');
-  await lobbyPlayer.joinRoom(lobbyRoomId, 'Bob');
+  const hostInfo = await lobbyHost.createRoom(lobbyRoomId, 'HostAlice');
+  assert(lobbyHost.roomId === lobbyRoomId, '大廳房主記錄正確 roomId');
+  assert(hostInfo.roomId === lobbyRoomId, '大廳房主回傳正確 roomId');
+
+  const playerInfo = await lobbyPlayer.joinRoom(lobbyRoomId, 'Bob');
+  assert(lobbyPlayer.roomId === lobbyRoomId, '大廳玩家記錄正確 roomId');
+  assert(playerInfo.roomId === lobbyRoomId, '大廳玩家回傳正確 roomId');
   await sleep(60);
 
   // 房主在大廳切換變體
@@ -186,6 +196,49 @@ async function runTest() {
   await mgr.reconfigure();
   assert(mgr.mode === NETWORK_MODE.BROADCAST_CHANNEL, 'reconfigure 後還原為 BroadcastChannel');
   delete globalThis.window;
+
+  section('5. 複製邀請連結 (copyRoomInviteLink)');
+  globalThis.window = {
+    location: {
+      href: 'https://example.com/ricochet/?test=123#old',
+      origin: 'https://example.com',
+      pathname: '/ricochet/',
+    },
+    isSecureContext: false, // 觸發 execCommand fallback
+  };
+  let execCommandArg = null;
+  let toastMsg = null;
+  globalThis.document = {
+    createElement: () => ({
+      style: {},
+      value: '',
+      focus: () => {},
+      select: () => {},
+      remove: () => {},
+    }),
+    body: {
+      appendChild: () => {},
+    },
+    execCommand: (cmd) => {
+      execCommandArg = cmd;
+      return true;
+    },
+    getElementById: () => null,
+  };
+
+  const copiedText = await copyRoomInviteLink('8392', {
+    showToast: (msg) => {
+      toastMsg = msg;
+    },
+  });
+
+  assert(copiedText.includes('#room=8392'), '產生的邀請連結格式包含 #room=8392');
+  assert(!copiedText.includes('test=123'), '邀請連結已清除原本的 query 參數');
+  assert(execCommandArg === 'copy', '非 secureContext 時順利觸發 execCommand copy fallback');
+  assert(toastMsg && toastMsg.includes('8392'), '觸發 Toast 提示告知已複製');
+
+  delete globalThis.window;
+  delete globalThis.document;
 
   section('測試結果');
   console.log(`  通過: ${passed}  失敗: ${failed}`);

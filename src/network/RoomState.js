@@ -40,9 +40,11 @@ export const BID_STATUS = Object.freeze({
 export class RoomState {
   /**
    * @param {object} [options]
+   * @param {string} [options.roomId] 房間代碼
    * @param {number} [options.countdownDuration=120] 競賽倒數時長（預設 120 秒）
    */
-  constructor({ countdownDuration = 120 } = {}) {
+  constructor({ roomId = null, countdownDuration = 120 } = {}) {
+    this.roomId = roomId;
     this.phase = ROOM_PHASE.LOBBY;
     this.round = 1;
     this.grid = null;
@@ -530,6 +532,7 @@ export class RoomState {
 
   serialize() {
     return {
+      roomId: this.roomId,
       phase: this.phase,
       round: this.round,
       target: this.target ? { ...this.target } : null,
@@ -555,6 +558,7 @@ export class RoomState {
 
   deserialize(snapshot, grid) {
     if (!snapshot) return;
+    if (snapshot.roomId) this.roomId = snapshot.roomId;
     this.phase = snapshot.phase;
     this.round = snapshot.round || 1;
     this.target = snapshot.target ? { ...snapshot.target } : null;

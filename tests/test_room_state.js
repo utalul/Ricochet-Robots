@@ -293,7 +293,8 @@ section('8. 白色機器人變體狀態同步 (useSilver in RoomState)');
 // =====================================================
 section('9. 多人房間等待大廳狀態機 (LOBBY 階段與手動啟動)');
 {
-  const room = new RoomState();
+  const room = new RoomState({ roomId: '8392' });
+  assert(room.roomId === '8392', 'RoomState 正確記錄 roomId');
   assert(room.phase === ROOM_PHASE.LOBBY, '房間初始階段為 LOBBY 等待室');
   assert(room.countdownEnd === null, '大廳階段不啟動計時器 (countdownEnd 為 null)');
 
@@ -310,11 +311,13 @@ section('9. 多人房間等待大廳狀態機 (LOBBY 階段與手動啟動)');
 
   // 快照序列化與反序列化
   const snapshot = room.serialize();
+  assert(snapshot.roomId === '8392', '快照序列化包含 roomId 8392');
   assert(snapshot.phase === ROOM_PHASE.LOBBY, '快照序列化 phase 為 LOBBY');
   assert(snapshot.players.length === 2, '快照序列化包含 2 位玩家');
 
   const guestRoom = new RoomState();
   guestRoom.deserialize(snapshot, null);
+  assert(guestRoom.roomId === '8392', '新玩家反序列化後成功同步 roomId 8392');
   assert(guestRoom.phase === ROOM_PHASE.LOBBY, '新玩家反序列化後為 LOBBY 狀態');
   assert(guestRoom.getPlayer('p1').isHost === true, '新玩家確認房主為 HostAlice');
 

@@ -344,6 +344,18 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .room-title {
   font-size: 1.05rem;
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.room-title strong,
+#mp-room-title,
+.room-title-code {
+  color: #ffca28;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  font-family: 'Courier New', Courier, monospace;
 }
 .badge {
   font-size: .72rem;
@@ -651,19 +663,24 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   margin-bottom: 12px;
 }
 .lobby-code-sub {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--muted);
-  letter-spacing: 1px;
+  letter-spacing: 1.5px;
   text-transform: uppercase;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
-.lobby-code-huge {
-  font-size: 2.2rem;
+.lobby-code-huge,
+.room-code-display,
+#lobby-room-code,
+#mp-waiting-room-code {
+  font-size: 2rem;
   font-weight: 800;
-  letter-spacing: 4px;
-  color: #ffb74d;
+  letter-spacing: 2.5px;
+  color: #ffca28;
   font-family: 'Courier New', Courier, monospace;
-  text-shadow: 0 0 12px rgba(255, 183, 77, 0.4);
+  text-shadow: 0 0 12px rgba(255, 202, 40, 0.45);
+  line-height: 1.2;
+  margin: 4px 0 8px;
 }
 .lobby-code-actions {
   margin-top: 10px;

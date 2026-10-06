@@ -679,6 +679,11 @@ function setupMultiplayerNetwork() {
       }
 
       roomState.deserialize(payload.snapshot, currentGrid);
+      if (payload.snapshot?.roomId) {
+        roomState.roomId = payload.snapshot.roomId;
+        if (mpHUD.roomInfo) mpHUD.roomInfo.roomId = payload.snapshot.roomId;
+        mpHUD.setRoomCode?.(payload.snapshot.roomId);
+      }
       const target = roomState.target;
       const useSilver = Boolean(
         payload.snapshot?.useSilver ||
@@ -1180,6 +1185,7 @@ async function init() {
     mpHUD = new MultiplayerHUD({
       container: elMpContainer,
       handlers: {
+        showToast: (msg, type) => showToast(msg, type),
         switchToMulti: () => switchGameMode('multi'),
         undo: () => handleUndo(),
         reset: () => handleReset(),
@@ -1190,6 +1196,9 @@ async function init() {
         createRoom: async ({ roomId, userName, useSilver }) => {
           try {
             const info = await roomManager.createRoom(roomId, userName);
+            const actualRoomId = info.roomId || roomId;
+            info.roomId = actualRoomId;
+            roomState.roomId = actualRoomId;
             roomState.phase = ROOM_PHASE.LOBBY;
             roomState.useSilver = Boolean(useSilver);
             updateRobotVariantUI(useSilver);
@@ -1223,7 +1232,7 @@ async function init() {
             mpHUD.setVariant(Boolean(useSilver));
             mpHUD.updatePhase(ROOM_PHASE.LOBBY);
             mpHUD.updatePlayers(roomState.getPlayerList(), true);
-            showToast(`房間【${roomId}】建立成功！等待玩家加入大廳 👑`, 'success');
+            showToast(`房間【${actualRoomId}】建立成功！等待玩家加入大廳 👑`, 'success');
           } catch (err) {
             console.error('建立房間失敗:', err);
             showToast('建立房間失敗：' + err.message, 'warn');
@@ -1232,6 +1241,9 @@ async function init() {
         joinRoom: async ({ roomId, userName }) => {
           try {
             const info = await roomManager.joinRoom(roomId, userName);
+            const actualRoomId = info.roomId || roomId;
+            info.roomId = actualRoomId;
+            roomState.roomId = actualRoomId;
             roomState.phase = ROOM_PHASE.LOBBY;
             info.isHost = false;
             roomState.addPlayer({ id: info.userId, name: info.userName, isHost: false });
@@ -1246,7 +1258,7 @@ async function init() {
               elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
             }
 
-            showToast(`成功加入房間【${roomId}】！正在同步遊戲大廳…`, 'success');
+            showToast(`成功加入房間【${actualRoomId}】！正在同步遊戲大廳…`, 'success');
           } catch (err) {
             console.error('加入房間失敗:', err);
             showToast('加入房間失敗：' + err.message, 'warn');
@@ -1254,6 +1266,9 @@ async function init() {
         },
         leaveRoom: async () => {
           await roomManager.leaveRoom();
+          roomState.roomId = null;
+          roomState.phase = ROOM_PHASE.LOBBY;
+          roomState.players.clear();
           mpHUD.setInRoom(false);
           updateRobotVariantUI(Boolean(elToggleSilver?.checked));
           showToast('已離開房間', 'info');
