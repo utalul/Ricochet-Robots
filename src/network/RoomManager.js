@@ -19,6 +19,8 @@ export const MSG_TYPE = Object.freeze({
   PLAYER_LEAVE: 'PLAYER_LEAVE',
   SYNC_REQUEST: 'SYNC_REQUEST',
   SYNC_RESPONSE: 'SYNC_RESPONSE',
+  START_GAME: 'START_GAME',         // 房主啟動遊戲（第 1 題開跑）
+  LOBBY_UPDATE: 'LOBBY_UPDATE',     // 大廳設定同步（變體開關等）
   NEW_ROUND: 'NEW_ROUND',
   REPORT_PB: 'REPORT_PB',           // 回報個人最佳解 (PB)
   ROUND_END_SYNC: 'ROUND_END_SYNC', // 回合結算同步
@@ -353,6 +355,24 @@ export class RoomManager {
   sendNewRound(roundData) {
     this.send(MSG_TYPE.NEW_ROUND, {
       ...roundData,
+      hostId: this.userId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** 房主發送開始遊戲通知（第 1 題開跑） */
+  sendStartGame(roundData) {
+    this.send(MSG_TYPE.START_GAME, {
+      ...roundData,
+      hostId: this.userId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** 房主發送大廳設定變更廣播（變體開關等） */
+  sendLobbyUpdate(data) {
+    this.send(MSG_TYPE.LOBBY_UPDATE, {
+      ...data,
       hostId: this.userId,
       timestamp: Date.now(),
     });

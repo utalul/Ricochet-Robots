@@ -290,6 +290,48 @@ section('8. 白色機器人變體狀態同步 (useSilver in RoomState)');
   assert('silver' in room2.initialRobots, '反序列化 initialRobots 包含 silver');
 }
 
+// =====================================================
+section('9. 多人房間等待大廳狀態機 (LOBBY 階段與手動啟動)');
+{
+  const room = new RoomState();
+  assert(room.phase === ROOM_PHASE.LOBBY, '房間初始階段為 LOBBY 等待室');
+  assert(room.countdownEnd === null, '大廳階段不啟動計時器 (countdownEnd 為 null)');
+
+  // 加入房主與玩家
+  room.addPlayer({ id: 'p1', name: 'HostAlice', isHost: true });
+  room.addPlayer({ id: 'p2', name: 'Bob', isHost: false });
+  assert(room.getPlayerList().length === 2, '大廳即時包含 2 位玩家');
+  assert(room.getPlayer('p1').isHost === true, 'HostAlice 標記為房主');
+  assert(room.getPlayer('p2').isHost === false, 'Bob 標記為非房主');
+
+  // 大廳中禁止回報解法
+  const resPB = room.reportSolution('p2', 5);
+  assert(!resPB.accepted && resPB.reason.includes('LOBBY'), '大廳階段拒絕回報解法');
+
+  // 快照序列化與反序列化
+  const snapshot = room.serialize();
+  assert(snapshot.phase === ROOM_PHASE.LOBBY, '快照序列化 phase 為 LOBBY');
+  assert(snapshot.players.length === 2, '快照序列化包含 2 位玩家');
+
+  const guestRoom = new RoomState();
+  guestRoom.deserialize(snapshot, null);
+  assert(guestRoom.phase === ROOM_PHASE.LOBBY, '新玩家反序列化後為 LOBBY 狀態');
+  assert(guestRoom.getPlayer('p1').isHost === true, '新玩家確認房主為 HostAlice');
+
+  // 房主啟動遊戲 -> 轉入 RACING 階段
+  const grid = emptyGrid();
+  room.startRound({
+    grid,
+    initialRobots: baseRobots(),
+    target: { color: 'red', shape: 'star', x: 3, y: 3 },
+    round: 1,
+    duration: 120,
+    phase: ROOM_PHASE.RACING,
+  });
+  assert(room.phase === ROOM_PHASE.RACING, '房主開始遊戲後轉入 RACING 競速階段');
+  assert(typeof room.countdownEnd === 'number', '開局後啟動 120 秒倒數計時器');
+}
+
 section('測試結果');
 console.log(`  通過: ${passed}  失敗: ${failed}`);
 if (failed > 0) process.exit(1);

@@ -128,7 +128,41 @@ async function runTest() {
   await host.leaveRoom();
   await player.leaveRoom();
 
-  section('3. 連線模式動態切換');
+  section('3. 房間等待大廳與房主啟動廣播 (START_GAME, LOBBY_UPDATE)');
+  const lobbyRoomId = 'room_lobby_' + Date.now();
+  const lobbyHost = new RoomManager();
+  const lobbyPlayer = new RoomManager();
+
+  let playerReceivedStart = null;
+  let playerReceivedLobbyUpdate = null;
+
+  lobbyPlayer.on(MSG_TYPE.START_GAME, (data) => {
+    playerReceivedStart = data;
+  });
+  lobbyPlayer.on(MSG_TYPE.LOBBY_UPDATE, (data) => {
+    playerReceivedLobbyUpdate = data;
+  });
+
+  await lobbyHost.createRoom(lobbyRoomId, 'HostAlice');
+  await lobbyPlayer.joinRoom(lobbyRoomId, 'Bob');
+  await sleep(60);
+
+  // 房主在大廳切換變體
+  lobbyHost.sendLobbyUpdate({ useSilver: true });
+  await sleep(60);
+  assert(playerReceivedLobbyUpdate !== null, '玩家收到大廳變體更新');
+  assert(playerReceivedLobbyUpdate?.payload?.useSilver === true, '變體設定更新為 useSilver: true');
+
+  // 房主啟動遊戲
+  lobbyHost.sendStartGame({ round: 1, duration: 120, useSilver: true });
+  await sleep(60);
+  assert(playerReceivedStart !== null, '玩家收到房主開始遊戲通知 (START_GAME)');
+  assert(playerReceivedStart?.payload?.round === 1, '開始第 1 題');
+
+  await lobbyHost.leaveRoom();
+  await lobbyPlayer.leaveRoom();
+
+  section('4. 連線模式動態切換');
   const mgr = new RoomManager();
   assert(mgr.mode === NETWORK_MODE.BROADCAST_CHANNEL, '預設無設定時為 BroadcastChannel');
   assert(mgr.getEffectiveMode() === NETWORK_MODE.BROADCAST_CHANNEL, 'getEffectiveMode 回傳 BroadcastChannel');

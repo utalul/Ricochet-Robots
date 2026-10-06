@@ -20,6 +20,7 @@ import { GameState } from '../core/GameState.js';
 import { cloneRobots } from '../core/MovementEngine.js';
 
 export const ROOM_PHASE = Object.freeze({
+  LOBBY: 'LOBBY',
   RACING: 'RACING',
   ROUND_END: 'ROUND_END',
   GAME_OVER: 'GAME_OVER',
@@ -42,7 +43,7 @@ export class RoomState {
    * @param {number} [options.countdownDuration=120] 競賽倒數時長（預設 120 秒）
    */
   constructor({ countdownDuration = 120 } = {}) {
-    this.phase = ROOM_PHASE.RACING;
+    this.phase = ROOM_PHASE.LOBBY;
     this.round = 1;
     this.grid = null;
     this.target = null;

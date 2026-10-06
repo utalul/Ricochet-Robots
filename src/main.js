@@ -360,14 +360,27 @@ function switchGameMode(mode) {
     if (mpHUD?.inRoom && roomState.grid) {
       updateRobotVariantUI(Boolean(roomState.useSilver));
       renderer.setBoard(roomState.grid);
-      renderer.setTarget(roomState.target);
-      renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
-      if (elTargetIcon) {
-        elTargetIcon.innerHTML = '';
-        elTargetIcon.appendChild(createTargetIcon(roomState.target, 40));
-      }
-      if (elTargetText) {
-        elTargetText.innerHTML = getTargetDescription(roomState.target);
+      if (roomState.phase === ROOM_PHASE.LOBBY) {
+        renderer.setTarget(null);
+        if (roomState.initialRobots) {
+          renderer.renderRobots(roomState.initialRobots, selectedRobot, { animate: false });
+        }
+        if (elTargetIcon) {
+          elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+        }
+        if (elTargetText) {
+          elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
+        }
+      } else {
+        renderer.setTarget(roomState.target);
+        renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
+        if (elTargetIcon) {
+          elTargetIcon.innerHTML = '';
+          elTargetIcon.appendChild(createTargetIcon(roomState.target, 40));
+        }
+        if (elTargetText) {
+          elTargetText.innerHTML = getTargetDescription(roomState.target);
+        }
       }
     }
   } else {
@@ -403,7 +416,11 @@ function handleMove(direction) {
   // ========== 多人連線 2 分鐘同步競速模式 ==========
   if (currentMode === 'multi' && mpHUD?.inRoom) {
     if (roomState.phase !== ROOM_PHASE.RACING) {
-      showToast('🏁 本回合已結束結算中，棋盤已鎖定！請等待房主開始下一輪', 'info', 2200);
+      if (roomState.phase === ROOM_PHASE.LOBBY) {
+        showToast('⏳ 等待大廳中，請等待房主開始遊戲！', 'info', 2000);
+      } else {
+        showToast('🏁 本回合已結束結算中，棋盤已鎖定！請等待房主開始下一輪', 'info', 2200);
+      }
       renderer.bump(selectedRobot, direction);
       return;
     }
@@ -670,40 +687,122 @@ function setupMultiplayerNetwork() {
       updateRobotVariantUI(useSilver);
       if (mpHUD) mpHUD.setVariant(useSilver);
 
-      if (target) {
-        renderer.setTarget(target);
+      if (roomState.phase === ROOM_PHASE.LOBBY) {
+        renderer.setTarget(null);
+        if (roomState.initialRobots) {
+          renderer.renderRobots(roomState.initialRobots, selectedRobot, { animate: false });
+        }
         if (elTargetIcon) {
-          elTargetIcon.innerHTML = '';
-          elTargetIcon.appendChild(createTargetIcon(target, 40));
+          elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
         }
         if (elTargetText) {
-          elTargetText.innerHTML = getTargetDescription(target);
+          elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
         }
-      }
+        mpHUD.updatePhase(ROOM_PHASE.LOBBY);
+      } else {
+        if (target) {
+          renderer.setTarget(target);
+          if (elTargetIcon) {
+            elTargetIcon.innerHTML = '';
+            elTargetIcon.appendChild(createTargetIcon(target, 40));
+          }
+          if (elTargetText) {
+            elTargetText.innerHTML = getTargetDescription(target);
+          }
+        }
 
-      if (roomState.initialRobots && target) {
-        localMultiGameState.initRound(currentGrid, roomState.initialRobots, target);
-        renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
+        if (roomState.initialRobots && target) {
+          localMultiGameState.initRound(currentGrid, roomState.initialRobots, target);
+          renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
+        }
+
+        mpHUD.updateLeaderboard(roomState.getLeaderboard());
+        mpHUD.updateTargetProgress(
+          roomState.round,
+          roomState.completedTargets.length,
+          roomState.totalTargetsCount
+        );
+        mpHUD.updatePhase(roomState.phase, {
+          countdownEnd: roomState.countdownEnd,
+          countdownDuration: roomState.countdownDuration,
+        });
       }
 
       mpHUD.updatePlayers(roomState.getPlayerList(), roomManager.isHost);
-      mpHUD.updateLeaderboard(roomState.getLeaderboard());
-      mpHUD.updateTargetProgress(
-        roomState.round,
-        roomState.completedTargets.length,
-        roomState.totalTargetsCount
-      );
-      mpHUD.updatePhase(roomState.phase, {
-        countdownEnd: roomState.countdownEnd,
-        countdownDuration: roomState.countdownDuration,
-      });
-
       updateHUD();
-      showToast('已同步房主最新遊戲狀態！進入競速', 'success');
+      showToast('已同步房間最新狀態！', 'success', 2000);
     }
   });
 
-  // 4. 新回合開局廣播
+  // 4. 房主啟動遊戲廣播 (START_GAME)
+  roomManager.on(MSG_TYPE.START_GAME, ({ payload }) => {
+    if (payload.quadBoardIds && payload.quadBoardIds.length === 4) {
+      currentQuadBoards = payload.quadBoardIds.map(
+        (id) => allBoards.find((b) => b.board_id === id) || allBoards[0]
+      );
+      currentGrid = assembleBigBoard(...currentQuadBoards);
+      renderer.setBoard(currentGrid);
+    }
+
+    const useSilver = Boolean(
+      payload.useSilver || (payload.initialRobots && payload.initialRobots.silver)
+    );
+    updateRobotVariantUI(useSilver);
+    if (mpHUD) mpHUD.setVariant(useSilver);
+
+    roomState.startRound({
+      grid: currentGrid,
+      initialRobots: payload.initialRobots,
+      target: payload.target,
+      round: payload.round || 1,
+      duration: payload.duration || 120,
+      useSilver,
+      phase: ROOM_PHASE.RACING,
+    });
+
+    localMultiGameState.initRound(currentGrid, payload.initialRobots, payload.target);
+    localPbMoves = null;
+
+    renderer.setTarget(payload.target);
+    renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
+
+    if (elTargetIcon) {
+      elTargetIcon.innerHTML = '';
+      elTargetIcon.appendChild(createTargetIcon(payload.target, 40));
+    }
+    if (elTargetText) {
+      elTargetText.innerHTML = getTargetDescription(payload.target);
+    }
+
+    hideSoloModal();
+    hideRoundModal();
+
+    mpHUD.setPersonalBest(null);
+    mpHUD.updateLeaderboard([]);
+    mpHUD.updateTargetProgress(payload.round || 1, roomState.completedTargets.length, 17);
+    mpHUD.updatePhase(ROOM_PHASE.RACING, {
+      countdownEnd: roomState.countdownEnd,
+      countdownDuration: roomState.countdownDuration || 120,
+    });
+
+    updateHUD();
+    showToast(`🔔 房主已啟動遊戲！第 1 題 2 分鐘同步競速倒數啟動！`, 'info', 3200);
+  });
+
+  // 5. 大廳設定同步（如白色機器人開關）
+  roomManager.on(MSG_TYPE.LOBBY_UPDATE, ({ payload }) => {
+    if (payload.useSilver !== undefined) {
+      roomState.useSilver = Boolean(payload.useSilver);
+      updateRobotVariantUI(roomState.useSilver);
+      if (mpHUD) mpHUD.setVariant(roomState.useSilver);
+    }
+    if (payload.initialRobots && currentGrid) {
+      roomState.initialRobots = payload.initialRobots;
+      renderer.renderRobots(roomState.initialRobots, selectedRobot, { animate: false });
+    }
+  });
+
+  // 6. 新回合開局廣播
   roomManager.on(MSG_TYPE.NEW_ROUND, ({ payload }) => {
     if (payload.quadBoardIds && payload.quadBoardIds.length === 4) {
       currentQuadBoards = payload.quadBoardIds.map(
@@ -835,6 +934,105 @@ function handleDisplayRoundOutcome(result) {
   } else {
     showRoundModal('🏁 回合結束', '本回合競賽結束，準備進入下一題。');
   }
+}
+
+/** 房主手動啟動遊戲（由等待大廳進入第 1 題） */
+function startMultiplayerGame() {
+  if (!roomManager.isHost) return;
+
+  hideRoundModal();
+  hideGameOverModal();
+
+  if (!currentGrid) {
+    currentQuadBoards = pickQuadrantBoards(allBoards);
+    currentGrid = assembleBigBoard(...currentQuadBoards);
+    renderer.setBoard(currentGrid);
+  }
+
+  const allTargets = collectTargets(currentGrid);
+  roomState.setTargetDeck(createTargetDeck(allTargets));
+
+  const useSilver = Boolean(roomState.useSilver);
+  updateRobotVariantUI(useSilver);
+  if (mpHUD) mpHUD.setVariant(useSilver);
+
+  const initialRobots =
+    roomState.initialRobots ||
+    randomRobotPositions(currentGrid, Math.random, { useSilver });
+  roomState.initialRobots = initialRobots;
+
+  const target = drawTarget(roomState.targetDeck, initialRobots);
+  if (!target) {
+    showToast('無可用目標', 'warn');
+    return;
+  }
+
+  roomState.startRound({
+    grid: currentGrid,
+    initialRobots,
+    target,
+    round: 1,
+    duration: 120,
+    useSilver,
+    phase: ROOM_PHASE.RACING,
+  });
+
+  localMultiGameState.initRound(currentGrid, initialRobots, target);
+  localPbMoves = null;
+
+  renderer.setTarget(target);
+  renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
+
+  if (elTargetIcon) {
+    elTargetIcon.innerHTML = '';
+    elTargetIcon.appendChild(createTargetIcon(target, 40));
+  }
+  if (elTargetText) {
+    elTargetText.innerHTML = getTargetDescription(target);
+  }
+
+  mpHUD.setPersonalBest(null);
+  mpHUD.updateLeaderboard([]);
+  mpHUD.updateTargetProgress(1, 0, 17);
+  mpHUD.updatePhase(ROOM_PHASE.RACING, {
+    countdownEnd: roomState.countdownEnd,
+    countdownDuration: 120,
+  });
+
+  updateHUD();
+
+  // 廣播給房間內所有玩家：開始遊戲
+  roomManager.sendStartGame({
+    round: 1,
+    quadBoardIds: currentQuadBoards.map((b) => b.board_id),
+    initialRobots,
+    target,
+    duration: 120,
+    useSilver,
+  });
+
+  showToast('🔔 遊戲正式開始！第 1 題 2 分鐘同步競速倒數！', 'info', 3200);
+}
+
+/** 房主在大廳切換白色機器人變體 */
+function handleHostLobbyVariant(useSilver) {
+  if (!roomManager.isHost) return;
+  roomState.useSilver = Boolean(useSilver);
+  updateRobotVariantUI(useSilver);
+  if (mpHUD) mpHUD.setVariant(useSilver);
+
+  if (currentGrid) {
+    const initRobots = randomRobotPositions(currentGrid, Math.random, {
+      useSilver: roomState.useSilver,
+    });
+    roomState.initialRobots = initRobots;
+    renderer.renderRobots(initRobots, selectedRobot, { animate: false });
+  }
+
+  roomManager.sendLobbyUpdate({
+    useSilver: roomState.useSilver,
+    initialRobots: roomState.initialRobots,
+  });
 }
 
 /** 房主開新回合（2 分鐘同步競速） */
@@ -986,19 +1184,46 @@ async function init() {
         undo: () => handleUndo(),
         reset: () => handleReset(),
         nextRound: () => startMultiplayerRound(),
+        startGame: () => startMultiplayerGame(),
+        lobbyVariantChanged: ({ useSilver }) => handleHostLobbyVariant(useSilver),
         countdownExpired: () => handleCountdownExpired(),
         createRoom: async ({ roomId, userName, useSilver }) => {
           try {
             const info = await roomManager.createRoom(roomId, userName);
+            roomState.phase = ROOM_PHASE.LOBBY;
             roomState.useSilver = Boolean(useSilver);
             updateRobotVariantUI(useSilver);
             info.useSilver = Boolean(useSilver);
+            info.isHost = true;
             roomState.addPlayer({ id: info.userId, name: info.userName, isHost: true });
+
+            // 初始化房間版圖（大地圖與機器人初始落點），目標蓋牌
+            currentQuadBoards = pickQuadrantBoards(allBoards);
+            currentGrid = assembleBigBoard(...currentQuadBoards);
+            renderer.setBoard(currentGrid);
+
+            const allTargets = collectTargets(currentGrid);
+            roomState.setTargetDeck(createTargetDeck(allTargets));
+
+            const initRobots = randomRobotPositions(currentGrid, Math.random, {
+              useSilver: roomState.useSilver,
+            });
+            roomState.initialRobots = initRobots;
+            renderer.setTarget(null);
+            renderer.renderRobots(initRobots, selectedRobot, { animate: false });
+
+            if (elTargetIcon) {
+              elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+            }
+            if (elTargetText) {
+              elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
+            }
+
             mpHUD.setInRoom(true, info);
             mpHUD.setVariant(Boolean(useSilver));
+            mpHUD.updatePhase(ROOM_PHASE.LOBBY);
             mpHUD.updatePlayers(roomState.getPlayerList(), true);
-            showToast(`房間【${roomId}】建立成功！您是房主 👑`, 'success');
-            startMultiplayerRound();
+            showToast(`房間【${roomId}】建立成功！等待玩家加入大廳 👑`, 'success');
           } catch (err) {
             console.error('建立房間失敗:', err);
             showToast('建立房間失敗：' + err.message, 'warn');
@@ -1007,10 +1232,21 @@ async function init() {
         joinRoom: async ({ roomId, userName }) => {
           try {
             const info = await roomManager.joinRoom(roomId, userName);
+            roomState.phase = ROOM_PHASE.LOBBY;
+            info.isHost = false;
             roomState.addPlayer({ id: info.userId, name: info.userName, isHost: false });
             mpHUD.setInRoom(true, info);
+            mpHUD.updatePhase(ROOM_PHASE.LOBBY);
             mpHUD.updatePlayers(roomState.getPlayerList(), false);
-            showToast(`成功加入房間【${roomId}】！正在同步遊戲…`, 'success');
+
+            if (elTargetIcon) {
+              elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+            }
+            if (elTargetText) {
+              elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
+            }
+
+            showToast(`成功加入房間【${roomId}】！正在同步遊戲大廳…`, 'success');
           } catch (err) {
             console.error('加入房間失敗:', err);
             showToast('加入房間失敗：' + err.message, 'warn');

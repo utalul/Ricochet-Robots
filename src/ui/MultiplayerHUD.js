@@ -90,63 +90,100 @@ export class MultiplayerHUD {
 
           <!-- 在線玩家清單與得分 -->
           <div class="players-bar">
-            <div class="label">在線玩家 (<span id="mp-player-count">0</span>)：</div>
+            <div class="label" id="mp-players-label">在線玩家 (<span id="mp-player-count">0</span> / 100)：</div>
             <div id="mp-player-chips" class="player-chips"></div>
           </div>
 
-          <!-- 17 題目標完成進度 -->
-          <div class="target-progress-wrap card" style="padding: 8px 10px; background: rgba(0,0,0,0.2); margin-bottom: 8px;">
-            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
-              <span>🎯 目標牌堆進度：</span>
-              <span id="mp-target-progress-text" style="font-weight: 700; color: var(--accent);">第 1 題 (已完成 0 / 17 題)</span>
+          <!-- 2A. 房間等待室面板 (LOBBY 階段顯示) -->
+          <div id="mp-waiting-room" class="waiting-room-wrap">
+            <div class="lobby-code-card">
+              <div class="lobby-code-sub">房間代碼</div>
+              <div class="lobby-code-huge" id="mp-waiting-room-code">----</div>
+              <div class="lobby-code-actions">
+                <button type="button" id="btn-lobby-copy-link" class="btn-sm primary">📋 複製邀請連結</button>
+              </div>
             </div>
-            <div class="progress-bar" style="height: 6px;">
-              <div id="mp-target-progress-bar" class="progress-fill" style="width: 0%; background: #4fc3f7;"></div>
+
+            <!-- 房主變體設定開關 -->
+            <div id="mp-lobby-host-variant" class="lobby-variant-row" style="display: none;">
+              <label for="mp-lobby-use-silver" style="cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 0.88rem;">
+                <input type="checkbox" id="mp-lobby-use-silver" />
+                <span>☑ 啟用白色機器人變體 (Silver Robot)</span>
+              </label>
             </div>
-          </div>
 
-          <!-- 120 秒競速倒數計時器 -->
-          <div id="mp-timer-wrap" class="timer-wrap">
-            <div class="timer-info">
-              <span class="timer-label">⏳ 2 分鐘同步競速倒數：</span>
-              <span id="mp-timer-text" class="timer-seconds">120s</span>
+            <!-- 非房主變體狀態提示 -->
+            <div id="mp-lobby-guest-variant" class="lobby-variant-info" style="display: none;">
+              變體模式：<strong id="mp-lobby-variant-text" style="color: var(--accent);">標準 4 色模式</strong>
             </div>
-            <div class="progress-bar">
-              <div id="mp-timer-bar" class="progress-fill" style="width: 100%;"></div>
-            </div>
-          </div>
 
-          <!-- 階段指示橫幅 -->
-          <div id="mp-phase-banner" class="phase-banner phase-countdown">
-            🏃 同步競速中！請在本地棋盤自由試走，找出最短路徑
-          </div>
-
-          <!-- 個人最佳成績狀態卡 -->
-          <div class="card my-pb-card" style="padding: 8px 12px; margin-bottom: 10px; background: #222938; border: 1px solid rgba(255,183,77,0.3);">
-            <div style="font-size: 0.82rem; color: var(--muted);">你的本回合最佳 (PB)：</div>
-            <div id="mp-my-pb" style="font-size: 1.15rem; font-weight: 700; color: var(--accent); margin-top: 2px;">
-              尚未達陣（請嘗試滑動機器人）
-            </div>
-          </div>
-
-          <!-- 本地試走輔助操作按鈕 -->
-          <div class="sandbox-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
-            <button type="button" id="btn-mp-undo" class="btn-sm">↶ 復原 <kbd>Z</kbd></button>
-            <button type="button" id="btn-mp-reset" class="btn-sm">⟲ 重回起點 <kbd>R</kbd></button>
-          </div>
-
-          <!-- 即時排行榜 -->
-          <div class="leaderboard-wrap">
-            <div class="label">🏆 即時步數排行榜（少者領先）：</div>
-            <div id="mp-leaderboard" class="leaderboard-list">
-              <div class="empty-lb">尚未有玩家達陣，全員試走中…</div>
+            <!-- 大廳控制按鈕 -->
+            <div class="lobby-controls">
+              <button type="button" id="btn-lobby-start-game" class="btn-large-start" style="display: none;">
+                🚀 開始遊戲
+              </button>
+              <button type="button" id="btn-lobby-waiting" class="btn-waiting" disabled style="display: none;">
+                ⏳ 等待房主開始遊戲...
+              </button>
             </div>
           </div>
 
-          <!-- 房主專屬操作列 -->
-          <div id="mp-host-controls" class="host-controls" hidden style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
-            <button type="button" id="btn-host-settle" class="btn-sm">房主：提前結算</button>
-            <button type="button" id="btn-host-next" class="primary btn-sm">房主：開始下一題 <kbd>N</kbd></button>
+          <!-- 2B. 競賽進行中面板 (RACING / ROUND_END / GAME_OVER 階段顯示) -->
+          <div id="mp-racing-panel" class="racing-panel-wrap" style="display: none;">
+            <!-- 17 題目標完成進度 -->
+            <div class="target-progress-wrap card" style="padding: 8px 10px; background: rgba(0,0,0,0.2); margin-bottom: 8px;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                <span>🎯 目標牌堆進度：</span>
+                <span id="mp-target-progress-text" style="font-weight: 700; color: var(--accent);">第 1 題 (已完成 0 / 17 題)</span>
+              </div>
+              <div class="progress-bar" style="height: 6px;">
+                <div id="mp-target-progress-bar" class="progress-fill" style="width: 0%; background: #4fc3f7;"></div>
+              </div>
+            </div>
+
+            <!-- 120 秒競速倒數計時器 -->
+            <div id="mp-timer-wrap" class="timer-wrap">
+              <div class="timer-info">
+                <span class="timer-label">⏳ 2 分鐘同步競速倒數：</span>
+                <span id="mp-timer-text" class="timer-seconds">120s</span>
+              </div>
+              <div class="progress-bar">
+                <div id="mp-timer-bar" class="progress-fill" style="width: 100%;"></div>
+              </div>
+            </div>
+
+            <!-- 階段指示橫幅 -->
+            <div id="mp-phase-banner" class="phase-banner phase-countdown">
+              🏃 同步競速中！請在本地棋盤自由試走，找出最短路徑
+            </div>
+
+            <!-- 個人最佳成績狀態卡 -->
+            <div class="card my-pb-card" style="padding: 8px 12px; margin-bottom: 10px; background: #222938; border: 1px solid rgba(255,183,77,0.3);">
+              <div style="font-size: 0.82rem; color: var(--muted);">你的本回合最佳 (PB)：</div>
+              <div id="mp-my-pb" style="font-size: 1.15rem; font-weight: 700; color: var(--accent); margin-top: 2px;">
+                尚未達陣（請嘗試滑動機器人）
+              </div>
+            </div>
+
+            <!-- 本地試走輔助操作按鈕 -->
+            <div class="sandbox-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
+              <button type="button" id="btn-mp-undo" class="btn-sm">↶ 復原 <kbd>Z</kbd></button>
+              <button type="button" id="btn-mp-reset" class="btn-sm">⟲ 重回起點 <kbd>R</kbd></button>
+            </div>
+
+            <!-- 即時排行榜 -->
+            <div class="leaderboard-wrap">
+              <div class="label">🏆 即時步數排行榜（少者領先）：</div>
+              <div id="mp-leaderboard" class="leaderboard-list">
+                <div class="empty-lb">尚未有玩家達陣，全員試走中…</div>
+              </div>
+            </div>
+
+            <!-- 房主專屬操作列 -->
+            <div id="mp-host-controls" class="host-controls" hidden style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
+              <button type="button" id="btn-host-settle" class="btn-sm">房主：提前結算</button>
+              <button type="button" id="btn-host-next" class="primary btn-sm">房主：開始下一題 <kbd>N</kbd></button>
+            </div>
           </div>
         </div>
 
@@ -193,6 +230,18 @@ export class MultiplayerHUD {
     this.playerCount = this.container.querySelector('#mp-player-count');
     this.playerChips = this.container.querySelector('#mp-player-chips');
 
+    // 等待室元件
+    this.waitingRoom = this.container.querySelector('#mp-waiting-room');
+    this.waitingRoomCode = this.container.querySelector('#mp-waiting-room-code');
+    this.lobbyHostVariant = this.container.querySelector('#mp-lobby-host-variant');
+    this.lobbyUseSilver = this.container.querySelector('#mp-lobby-use-silver');
+    this.lobbyGuestVariant = this.container.querySelector('#mp-lobby-guest-variant');
+    this.lobbyVariantText = this.container.querySelector('#mp-lobby-variant-text');
+    this.btnLobbyStartGame = this.container.querySelector('#btn-lobby-start-game');
+    this.btnLobbyWaiting = this.container.querySelector('#btn-lobby-waiting');
+
+    // 競賽進行中元件
+    this.racingPanel = this.container.querySelector('#mp-racing-panel');
     this.targetProgressText = this.container.querySelector('#mp-target-progress-text');
     this.targetProgressBar = this.container.querySelector('#mp-target-progress-bar');
 
@@ -217,10 +266,14 @@ export class MultiplayerHUD {
   }
 
   _bindEvents() {
-    // 建立房間
+    // 建立房間（若無輸入代碼則自動隨機生成 4 碼數字代碼）
     this.container.querySelector('#btn-create-room').addEventListener('click', () => {
       const name = this._saveAndGetName();
-      const roomId = this.inputRoom.value.trim() || String(Math.floor(1000 + Math.random() * 9000));
+      let roomId = this.inputRoom.value.trim();
+      if (!roomId) {
+        roomId = String(Math.floor(1000 + Math.random() * 9000));
+        this.inputRoom.value = roomId;
+      }
       const useSilver = Boolean(this.inputUseSilver?.checked);
       this._call('createRoom', { roomId, userName: name, useSilver });
     });
@@ -236,18 +289,21 @@ export class MultiplayerHUD {
       this._call('joinRoom', { roomId, userName: name });
     });
 
-    // 複製邀請連結
-    this.container.querySelector('#btn-copy-link').addEventListener('click', () => {
-      if (!this.roomInfo) return;
-      const url = `${window.location.origin}${window.location.pathname}#room=${this.roomInfo.roomId}`;
-      navigator.clipboard
-        ?.writeText(url)
-        .then(() => {
-          alert('已複製房間邀請連結：' + url);
-        })
-        .catch(() => {
-          prompt('請複製房間網址：', url);
-        });
+    // 複製邀請連結 (頂部按鈕與大廳卡片按鈕)
+    const copyLinkHandler = () => this._copyInviteLink();
+    this.container.querySelector('#btn-copy-link')?.addEventListener('click', copyLinkHandler);
+    this.container.querySelector('#btn-lobby-copy-link')?.addEventListener('click', copyLinkHandler);
+
+    // 房主在大廳點擊開始遊戲
+    this.btnLobbyStartGame?.addEventListener('click', () => {
+      this._call('startGame');
+    });
+
+    // 房主在大廳切換白色機器人變體
+    this.lobbyUseSilver?.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      this.setVariant(checked);
+      this._call('lobbyVariantChanged', { useSilver: checked });
     });
 
     // 離開房間
@@ -346,6 +402,19 @@ export class MultiplayerHUD {
     }
   }
 
+  _copyInviteLink() {
+    if (!this.roomInfo?.roomId) return;
+    const url = `${window.location.origin}${window.location.pathname}#room=${this.roomInfo.roomId}`;
+    navigator.clipboard
+      ?.writeText(url)
+      .then(() => {
+        alert('已複製房間邀請連結：' + url);
+      })
+      .catch(() => {
+        prompt('請複製房間網址：', url);
+      });
+  }
+
   // ---------- 對外控制方法 ----------
 
   switchMode(mode) {
@@ -364,6 +433,7 @@ export class MultiplayerHUD {
 
     if (inRoom && info) {
       this.roomTitle.textContent = info.roomId;
+      if (this.waitingRoomCode) this.waitingRoomCode.textContent = info.roomId;
       this.netBadge.textContent = info.mode.includes('Supabase') ? '☁ Supabase' : '⚡ 本地分頁廣播';
       this.setVariant(Boolean(info.useSilver));
       if (history.replaceState) {
@@ -379,12 +449,20 @@ export class MultiplayerHUD {
   }
 
   setVariant(useSilver) {
+    const silver = Boolean(useSilver);
     if (this.variantBadge) {
-      this.variantBadge.style.display = useSilver ? 'inline-block' : 'none';
+      this.variantBadge.style.display = silver ? 'inline-block' : 'none';
+    }
+    if (this.lobbyUseSilver) {
+      this.lobbyUseSilver.checked = silver;
+    }
+    if (this.lobbyVariantText) {
+      this.lobbyVariantText.textContent = silver ? '⚪ 白色機器人變體 (已啟用)' : '標準 4 色模式';
     }
   }
 
   updatePlayers(players = [], isHost = false) {
+    if (this.roomInfo) this.roomInfo.isHost = isHost;
     this.playerCount.textContent = String(players.length);
     this.playerChips.innerHTML = '';
     players.forEach((p) => {
@@ -396,6 +474,13 @@ export class MultiplayerHUD {
       this.playerChips.appendChild(chip);
     });
     this.hostControls.hidden = !isHost;
+
+    if (this.currentPhase === ROOM_PHASE.LOBBY) {
+      if (this.btnLobbyStartGame) this.btnLobbyStartGame.style.display = isHost ? 'block' : 'none';
+      if (this.btnLobbyWaiting) this.btnLobbyWaiting.style.display = isHost ? 'none' : 'block';
+      if (this.lobbyHostVariant) this.lobbyHostVariant.style.display = isHost ? 'block' : 'none';
+      if (this.lobbyGuestVariant) this.lobbyGuestVariant.style.display = isHost ? 'none' : 'block';
+    }
   }
 
   updateTargetProgress(round = 1, completedCount = 0, totalCount = 17) {
@@ -422,7 +507,23 @@ export class MultiplayerHUD {
   }
 
   updatePhase(phase, phaseData = {}) {
+    this.currentPhase = phase;
     this.phaseBanner.className = 'phase-banner';
+
+    if (phase === ROOM_PHASE.LOBBY) {
+      if (this.waitingRoom) this.waitingRoom.style.display = 'block';
+      if (this.racingPanel) this.racingPanel.style.display = 'none';
+      this.stopTimer();
+      const isHost = Boolean(this.roomInfo?.isHost);
+      if (this.btnLobbyStartGame) this.btnLobbyStartGame.style.display = isHost ? 'block' : 'none';
+      if (this.btnLobbyWaiting) this.btnLobbyWaiting.style.display = isHost ? 'none' : 'block';
+      if (this.lobbyHostVariant) this.lobbyHostVariant.style.display = isHost ? 'block' : 'none';
+      if (this.lobbyGuestVariant) this.lobbyGuestVariant.style.display = isHost ? 'none' : 'block';
+      return;
+    }
+
+    if (this.waitingRoom) this.waitingRoom.style.display = 'none';
+    if (this.racingPanel) this.racingPanel.style.display = 'block';
 
     switch (phase) {
       case ROOM_PHASE.RACING:
