@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>碰撞機器人 Ricochet Robots</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>碰撞機器人 <span class="en">Ricochet Robots</span></h1>
+    <p class="subtitle">單機練習模式 · 機器人只會一路滑到撞牆或撞到其他機器人才停下</p>
+  </header>
+
+  <main class="layout">
+    <section class="board-wrap">
+      <div id="board" class="board" aria-label="遊戲棋盤"></div>
+    </section>
+
+    <aside class="panel">
+      <!-- 多人連線控制面板與模式切換 -->
+      <div id="mp-container"></div>
+
+      <div class="card target-card">
+        <div id="target-icon" class="target-icon-wrap"></div>
+        <div class="target-info">
+          <div class="label">本回合目標</div>
+          <div id="target-text" class="target-text">載入中…</div>
+        </div>
+      </div>
+
+      <div class="card stats">
+        <div class="stat">
+          <div class="label">步數</div>
+          <div id="move-count" class="stat-value">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">已完成</div>
+          <div id="solved-count" class="stat-value">0</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">選擇機器人 <span class="hint">（點棋盤或按 1–4）</span></div>
+        <div class="robot-select">
+          <button type="button" class="robot-btn" data-select="red" aria-pressed="false">
+            <span class="dot red"></span><span class="name">紅</span><kbd>1</kbd><span class="count" data-count="red">0</span>
+          </button>
+          <button type="button" class="robot-btn" data-select="blue" aria-pressed="false">
+            <span class="dot blue"></span><span class="name">藍</span><kbd>2</kbd><span class="count" data-count="blue">0</span>
+          </button>
+          <button type="button" class="robot-btn" data-select="yellow" aria-pressed="false">
+            <span class="dot yellow"></span><span class="name">黃</span><kbd>3</kbd><span class="count" data-count="yellow">0</span>
+          </button>
+          <button type="button" class="robot-btn" data-select="green" aria-pressed="false">
+            <span class="dot green"></span><span class="name">綠</span><kbd>4</kbd><span class="count" data-count="green">0</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="card controls-card">
+        <div class="dpad" aria-label="方向控制">
+          <button type="button" class="dir up" data-dir="up" aria-label="上">▲</button>
+          <button type="button" class="dir left" data-dir="left" aria-label="左">◀</button>
+          <button type="button" class="dir down" data-dir="down" aria-label="下">▼</button>
+          <button type="button" class="dir right" data-dir="right" aria-label="右">▶</button>
+        </div>
+        <div class="actions">
+          <button type="button" data-action="undo" id="btn-undo">↶ 復原 <kbd>Z</kbd></button>
+          <button type="button" data-action="reset" id="btn-reset">⟲ 重設 <kbd>R</kbd></button>
+          <button type="button" data-action="next" class="primary">下一題 <kbd>N</kbd></button>
+          <button type="button" data-action="newGame">新地圖 <kbd>M</kbd></button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">移動紀錄</div>
+        <ol id="history" class="history"><li class="empty">尚未移動</li></ol>
+      </div>
+
+      <details class="card help">
+        <summary>操作說明與規則</summary>
+        <ul>
+          <li>選取：點擊機器人，或按 <kbd>1</kbd> 紅、<kbd>2</kbd> 藍、<kbd>3</kbd> 黃、<kbd>4</kbd> 綠。</li>
+          <li>移動：方向鍵 / <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>、方向按鈕、在棋盤上滑動，或點擊與機器人同列/同欄的格子。</li>
+          <li>機器人會一路滑行，直到撞到牆、中央卡榫或其他機器人。</li>
+          <li>達陣條件：指定顏色的機器人停在目標格（漩渦任意顏色皆可），且<strong>該機器人本身至少移動 2 次</strong>。</li>
+          <li><kbd>Z</kbd> 復原、<kbd>R</kbd> 重設、<kbd>N</kbd> 下一題（機器人留在原位）、<kbd>M</kbd> 重新隨機地圖。</li>
+        </ul>
+      </details>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-emoji">🎉</div>
+      <h2 id="modal-title">成功達陣！</h2>
+      <p id="modal-detail"></p>
+      <div class="modal-actions">
+        <button type="button" data-action="next" class="primary" id="modal-next">下一題 <kbd>Enter</kbd></button>
+        <button type="button" data-action="reset">再挑戰一次</button>
+        <button type="button" data-action="cancel">關閉 <kbd>Esc</kbd></button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

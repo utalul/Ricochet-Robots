@@ -1,0 +1,17 @@
+{
+  "name": "ricochet-robots",
+  "version": "0.1.0",
+  "description": "Ricochet Robots multiplayer web game (static frontend, GitHub Pages ready)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node tests/test_board.js --quiet && node tests/test_movement.js && node tests/test_round_factory.js && node tests/test_room_state.js && node tests/test_room_manager.js",
+    "test:board": "node tests/test_board.js",
+    "test:movement": "node tests/test_movement.js",
+    "test:round": "node tests/test_round_factory.js",
+    "test:room": "node tests/test_room_state.js",
+    "test:network": "node tests/test_room_manager.js",
+    "start": "npx --yes http-server . -p 8080 -c-1"
+  },
+  "license": "MIT"
+}

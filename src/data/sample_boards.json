@@ -1,0 +1,96 @@
+{
+  "description": "8x8 sub-board samples. Original orientation: hub notch at bottom-right (7,7). Each target sits in an L-shaped wall corner; each board also has two walls perpendicular to its outer edges (top row / left column).",
+  "boards": [
+    {
+      "board_id": "A_01",
+      "group": "A",
+      "walls": [
+        { "x": 1, "y": 2, "edge": "top" },
+        { "x": 1, "y": 2, "edge": "right" },
+        { "x": 5, "y": 1, "edge": "bottom" },
+        { "x": 5, "y": 1, "edge": "left" },
+        { "x": 2, "y": 5, "edge": "left" },
+        { "x": 2, "y": 5, "edge": "bottom" },
+        { "x": 6, "y": 4, "edge": "right" },
+        { "x": 6, "y": 4, "edge": "top" },
+        { "x": 3, "y": 0, "edge": "right" },
+        { "x": 0, "y": 4, "edge": "bottom" }
+      ],
+      "targets": [
+        { "x": 1, "y": 2, "color": "red", "shape": "star" },
+        { "x": 5, "y": 1, "color": "green", "shape": "moon" },
+        { "x": 2, "y": 5, "color": "blue", "shape": "planet" },
+        { "x": 6, "y": 4, "color": "yellow", "shape": "gear" }
+      ]
+    },
+    {
+      "board_id": "B_01",
+      "group": "B",
+      "walls": [
+        { "x": 2, "y": 1, "edge": "bottom" },
+        { "x": 2, "y": 1, "edge": "right" },
+        { "x": 6, "y": 2, "edge": "top" },
+        { "x": 6, "y": 2, "edge": "left" },
+        { "x": 1, "y": 4, "edge": "top" },
+        { "x": 1, "y": 4, "edge": "right" },
+        { "x": 4, "y": 6, "edge": "bottom" },
+        { "x": 4, "y": 6, "edge": "left" },
+        { "x": 5, "y": 0, "edge": "right" },
+        { "x": 0, "y": 2, "edge": "bottom" }
+      ],
+      "targets": [
+        { "x": 2, "y": 1, "color": "red", "shape": "moon" },
+        { "x": 6, "y": 2, "color": "green", "shape": "planet" },
+        { "x": 1, "y": 4, "color": "blue", "shape": "gear" },
+        { "x": 4, "y": 6, "color": "yellow", "shape": "star" }
+      ]
+    },
+    {
+      "board_id": "C_01",
+      "group": "C",
+      "walls": [
+        { "x": 3, "y": 1, "edge": "left" },
+        { "x": 3, "y": 1, "edge": "top" },
+        { "x": 1, "y": 6, "edge": "right" },
+        { "x": 1, "y": 6, "edge": "bottom" },
+        { "x": 5, "y": 3, "edge": "bottom" },
+        { "x": 5, "y": 3, "edge": "right" },
+        { "x": 6, "y": 6, "edge": "top" },
+        { "x": 6, "y": 6, "edge": "left" },
+        { "x": 1, "y": 0, "edge": "right" },
+        { "x": 0, "y": 5, "edge": "bottom" }
+      ],
+      "targets": [
+        { "x": 3, "y": 1, "color": "red", "shape": "planet" },
+        { "x": 1, "y": 6, "color": "green", "shape": "gear" },
+        { "x": 5, "y": 3, "color": "blue", "shape": "star" },
+        { "x": 6, "y": 6, "color": "yellow", "shape": "moon" }
+      ]
+    },
+    {
+      "board_id": "D_01",
+      "group": "D",
+      "walls": [
+        { "x": 4, "y": 2, "edge": "top" },
+        { "x": 4, "y": 2, "edge": "left" },
+        { "x": 1, "y": 3, "edge": "bottom" },
+        { "x": 1, "y": 3, "edge": "right" },
+        { "x": 6, "y": 5, "edge": "right" },
+        { "x": 6, "y": 5, "edge": "bottom" },
+        { "x": 3, "y": 6, "edge": "left" },
+        { "x": 3, "y": 6, "edge": "top" },
+        { "x": 5, "y": 7, "edge": "top" },
+        { "x": 5, "y": 7, "edge": "right" },
+        { "x": 2, "y": 0, "edge": "right" },
+        { "x": 0, "y": 6, "edge": "bottom" }
+      ],
+      "targets": [
+        { "x": 4, "y": 2, "color": "red", "shape": "gear" },
+        { "x": 1, "y": 3, "color": "green", "shape": "star" },
+        { "x": 6, "y": 5, "color": "blue", "shape": "moon" },
+        { "x": 3, "y": 6, "color": "yellow", "shape": "planet" },
+        { "x": 5, "y": 7, "color": "multi", "shape": "vortex" }
+      ]
+    }
+  ]
+}
