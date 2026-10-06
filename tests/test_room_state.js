@@ -266,6 +266,30 @@ section('7. 狀態快照序列化與反序列化 (Serialize / Deserialize)');
   assert(room2.players.get('p1').score === 3, '反序列化後 player 分數一致');
 }
 
+// =====================================================
+section('8. 白色機器人變體狀態同步 (useSilver in RoomState)');
+{
+  const room = new RoomState();
+  const grid = emptyGrid();
+  room.useSilver = true;
+  room.startRound({
+    grid,
+    initialRobots: { ...baseRobots(), silver: { x: 0, y: 0 } },
+    target: { color: 'vortex', shape: 'vortex', x: 3, y: 3 },
+    useSilver: true,
+  });
+  assert(room.useSilver === true, 'startRound 設定 useSilver = true');
+  assert('silver' in room.initialRobots, 'initialRobots 包含 silver');
+
+  const snapshot = room.serialize();
+  assert(snapshot.useSilver === true, '序列化快照包含 useSilver = true');
+
+  const room2 = new RoomState();
+  room2.deserialize(snapshot, grid);
+  assert(room2.useSilver === true, '反序列化成功恢復 useSilver = true');
+  assert('silver' in room2.initialRobots, '反序列化 initialRobots 包含 silver');
+}
+
 section('測試結果');
 console.log(`  通過: ${passed}  失敗: ${failed}`);
 if (failed > 0) process.exit(1);

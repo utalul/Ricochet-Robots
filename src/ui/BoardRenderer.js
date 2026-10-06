@@ -1,7 +1,7 @@
 /**
  * BoardRenderer
  * 以 SVG 繪製 16×16 棋盤：格線、牆壁、中央卡榫、目標符號、機器人與滑動動畫。
- * 只負責「畫」，不持有遊戲規則狀態。
+ * 支援紅、藍、黃、綠以及第 5 台白色／銀色變體機器人。
  */
 import { COLOR_HEX } from '../core/constants.js';
 
@@ -12,14 +12,27 @@ export const ROBOT_HEX = Object.freeze({
   blue: '#1e88e5',
   yellow: '#fbc02d',
   green: '#43a047',
+  silver: '#e2e8f0',
+  white: '#e2e8f0',
 });
+
 const ROBOT_STROKE = Object.freeze({
   red: '#8e1c1a',
   blue: '#0d4f8b',
   yellow: '#8a6500',
   green: '#1f5e22',
+  silver: '#718096',
+  white: '#718096',
 });
-const ROBOT_KEY = Object.freeze({ red: '1', blue: '2', yellow: '3', green: '4' });
+
+const ROBOT_KEY = Object.freeze({
+  red: '1',
+  blue: '2',
+  yellow: '3',
+  green: '4',
+  silver: '5',
+  white: '5',
+});
 
 function el(tag, attrs = {}, parent = null) {
   const node = document.createElementNS(SVG_NS, tag);
@@ -49,7 +62,17 @@ export function createShape(shape, color, r) {
         const a = -Math.PI / 2 + (i * Math.PI) / 5;
         pts.push(`${(Math.cos(a) * rad).toFixed(2)},${(Math.sin(a) * rad).toFixed(2)}`);
       }
-      el('polygon', { points: pts.join(' '), fill, stroke, 'stroke-width': r * 0.08, 'stroke-linejoin': 'round' }, g);
+      el(
+        'polygon',
+        {
+          points: pts.join(' '),
+          fill,
+          stroke,
+          'stroke-width': r * 0.08,
+          'stroke-linejoin': 'round',
+        },
+        g
+      );
       break;
     }
     case 'moon': {
@@ -62,10 +85,19 @@ export function createShape(shape, color, r) {
     }
     case 'planet': {
       el('circle', { r: r * 0.58, fill, stroke, 'stroke-width': r * 0.08 }, g);
-      el('ellipse', {
-        rx: r * 0.98, ry: r * 0.3, fill: 'none', stroke: fill, 'stroke-width': r * 0.16,
-        transform: 'rotate(-22)', opacity: 0.9,
-      }, g);
+      el(
+        'ellipse',
+        {
+          rx: r * 0.98,
+          ry: r * 0.3,
+          fill: 'none',
+          stroke: fill,
+          'stroke-width': r * 0.16,
+          transform: 'rotate(-22)',
+          opacity: 0.9,
+        },
+        g
+      );
       break;
     }
     case 'gear': {
@@ -76,7 +108,17 @@ export function createShape(shape, color, r) {
         const rad = i % 4 < 2 ? r : r * 0.74;
         pts.push(`${(Math.cos(a) * rad).toFixed(2)},${(Math.sin(a) * rad).toFixed(2)}`);
       }
-      el('polygon', { points: pts.join(' '), fill, stroke, 'stroke-width': r * 0.06, 'stroke-linejoin': 'round' }, g);
+      el(
+        'polygon',
+        {
+          points: pts.join(' '),
+          fill,
+          stroke,
+          'stroke-width': r * 0.06,
+          'stroke-linejoin': 'round',
+        },
+        g
+      );
       el('circle', { r: r * 0.28, fill: '#fffaf0', stroke, 'stroke-width': r * 0.06 }, g);
       break;
     }
@@ -86,10 +128,17 @@ export function createShape(shape, color, r) {
       colors.forEach((c, i) => {
         const a0 = (i * Math.PI) / 2;
         const a1 = a0 + Math.PI / 2;
-        const x0 = Math.cos(a0) * r, y0 = Math.sin(a0) * r;
-        const x1 = Math.cos(a1) * r, y1 = Math.sin(a1) * r;
-        const xm = Math.cos(a0 + Math.PI / 4) * r * 0.35, ym = Math.sin(a0 + Math.PI / 4) * r * 0.35;
-        el('path', { d: `M 0 0 Q ${xm} ${ym} ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1} Z`, fill: c }, g);
+        const x0 = Math.cos(a0) * r,
+          y0 = Math.sin(a0) * r;
+        const x1 = Math.cos(a1) * r,
+          y1 = Math.sin(a1) * r;
+        const xm = Math.cos(a0 + Math.PI / 4) * r * 0.35,
+          ym = Math.sin(a0 + Math.PI / 4) * r * 0.35;
+        el(
+          'path',
+          { d: `M 0 0 Q ${xm} ${ym} ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1} Z`, fill: c },
+          g
+        );
       });
       el('circle', { r: r * 0.22, fill: '#fffaf0' }, g);
       g.classList.add('vortex-spin');
@@ -101,7 +150,13 @@ export function createShape(shape, color, r) {
 
 /** 建立獨立的目標小圖示 <svg>（HUD 使用） */
 export function createTargetIcon(target, size = 36) {
-  const svg = el('svg', { viewBox: '-20 -20 40 40', width: size, height: size, class: 'target-icon', 'aria-hidden': 'true' });
+  const svg = el('svg', {
+    viewBox: '-20 -20 40 40',
+    width: size,
+    height: size,
+    class: 'target-icon',
+    'aria-hidden': 'true',
+  });
   svg.appendChild(createShape(target.shape, target.color, 17));
   return svg;
 }
@@ -119,7 +174,11 @@ export class BoardRenderer {
     this.robotEls = {};
     this.positions = {};
 
-    this.svg = el('svg', { class: 'board-svg', role: 'img', 'aria-label': 'Ricochet Robots board' });
+    this.svg = el('svg', {
+      class: 'board-svg',
+      role: 'img',
+      'aria-label': 'Ricochet Robots board',
+    });
     this.layers = {};
     for (const name of ['bg', 'gridlines', 'targets', 'trails', 'walls', 'hub', 'robots']) {
       this.layers[name] = el('g', { class: `layer-${name}` }, this.svg);
@@ -161,7 +220,8 @@ export class BoardRenderer {
     el('rect', { x: 0, y: 0, width: W, height: W, class: 'board-bg' }, bg);
     for (let y = 0; y < this.size; y++) {
       for (let x = 0; x < this.size; x++) {
-        if ((x + y) % 2 === 0) el('rect', { x: x * C, y: y * C, width: C, height: C, class: 'cell-alt' }, bg);
+        if ((x + y) % 2 === 0)
+          el('rect', { x: x * C, y: y * C, width: C, height: C, class: 'cell-alt' }, bg);
       }
     }
 
@@ -176,21 +236,42 @@ export class BoardRenderer {
       for (const cell of row) {
         if (!cell.target) continue;
         const { cx, cy } = this.center(cell.x, cell.y);
-        const g = el('g', { class: 'target', transform: `translate(${cx} ${cy})`, 'data-x': cell.x, 'data-y': cell.y }, targets);
-        el('rect', {
-          x: -C / 2 + 1.5, y: -C / 2 + 1.5, width: C - 3, height: C - 3, rx: 4,
-          class: 'target-bg', fill: targetHex(cell.target.color),
-        }, g);
+        const g = el(
+          'g',
+          {
+            class: 'target',
+            transform: `translate(${cx} ${cy})`,
+            'data-x': cell.x,
+            'data-y': cell.y,
+          },
+          targets
+        );
+        el(
+          'rect',
+          {
+            x: -C / 2 + 1.5,
+            y: -C / 2 + 1.5,
+            width: C - 3,
+            height: C - 3,
+            rx: 4,
+            class: 'target-bg',
+            fill: targetHex(cell.target.color),
+          },
+          g
+        );
         g.appendChild(createShape(cell.target.shape, cell.target.color, C * 0.32));
         this.targetEls.push({ el: g, x: cell.x, y: cell.y });
       }
     }
 
-    // 牆壁：每格畫 top / left，最後一欄補 right、最後一列補 bottom（牆面已雙向一致）
+    // 牆壁
     const segs = [];
     for (const row of grid) {
       for (const c of row) {
-        const x0 = c.x * C, y0 = c.y * C, x1 = x0 + C, y1 = y0 + C;
+        const x0 = c.x * C,
+          y0 = c.y * C,
+          x1 = x0 + C,
+          y1 = y0 + C;
         if (c.top) segs.push(`M${x0} ${y0}H${x1}`);
         if (c.left) segs.push(`M${x0} ${y0}V${y1}`);
         if (c.right && c.x === this.size - 1) segs.push(`M${x1} ${y0}V${y1}`);
@@ -206,16 +287,28 @@ export class BoardRenderer {
       const minY = Math.min(...hubCells.map((c) => c.y));
       const maxX = Math.max(...hubCells.map((c) => c.x));
       const maxY = Math.max(...hubCells.map((c) => c.y));
-      el('rect', {
-        x: minX * C, y: minY * C, width: (maxX - minX + 1) * C, height: (maxY - minY + 1) * C,
-        class: 'hub', rx: 3,
-      }, hub);
+      el(
+        'rect',
+        {
+          x: minX * C,
+          y: minY * C,
+          width: (maxX - minX + 1) * C,
+          height: (maxY - minY + 1) * C,
+          class: 'hub',
+          rx: 3,
+        },
+        hub
+      );
       this.hubCenter = { cx: ((minX + maxX + 1) / 2) * C, cy: ((minY + maxY + 1) / 2) * C };
-      this.hubIcon = el('g', { class: 'hub-icon', transform: `translate(${this.hubCenter.cx} ${this.hubCenter.cy})` }, hub);
+      this.hubIcon = el(
+        'g',
+        { class: 'hub-icon', transform: `translate(${this.hubCenter.cx} ${this.hubCenter.cy})` },
+        hub
+      );
     }
   }
 
-  /** 標示本回合目標（其他目標淡化，中央卡榫顯示目標圖示） */
+  /** 標示本回合目標 */
   setTarget(target) {
     for (const t of this.targetEls ?? []) {
       const active = target && t.x === target.x && t.y === target.y;
@@ -232,10 +325,19 @@ export class BoardRenderer {
     if (this.robotEls[color]) return this.robotEls[color];
     const C = this.cell;
     const g = el('g', { class: 'robot', 'data-color': color }, this.layers.robots);
-    el('circle', { r: C * 0.46, class: 'robot-ring', stroke: ROBOT_HEX[color] }, g);
-    el('circle', { r: C * 0.36, class: 'robot-body', fill: ROBOT_HEX[color], stroke: ROBOT_STROKE[color] }, g);
+    const ringStroke = (color === 'silver' || color === 'white') ? '#ffffff' : ROBOT_HEX[color];
+    el('circle', { r: C * 0.46, class: 'robot-ring', stroke: ringStroke }, g);
+    el(
+      'circle',
+      { r: C * 0.36, class: 'robot-body', fill: ROBOT_HEX[color] ?? '#e2e8f0', stroke: ROBOT_STROKE[color] ?? '#718096' },
+      g
+    );
     el('circle', { r: C * 0.12, cx: -C * 0.11, cy: -C * 0.12, class: 'robot-shine' }, g);
-    const label = el('text', { class: 'robot-label', 'text-anchor': 'middle', 'dominant-baseline': 'central', y: 1 }, g);
+    const label = el(
+      'text',
+      { class: 'robot-label', 'text-anchor': 'middle', 'dominant-baseline': 'central', y: 1 },
+      g
+    );
     label.textContent = ROBOT_KEY[color] ?? '';
     this.robotEls[color] = g;
     return g;
@@ -246,7 +348,7 @@ export class BoardRenderer {
     if (durationMs <= 0) {
       g.style.transition = 'none';
       g.style.transform = `translate(${cx}px, ${cy}px)`;
-      void g.getBoundingClientRect(); // 強制 reflow，讓下一次 transition 生效
+      void g.getBoundingClientRect();
       g.style.transition = '';
     } else {
       g.style.transitionDuration = `${durationMs}ms`;
@@ -254,20 +356,24 @@ export class BoardRenderer {
     }
   }
 
-  /** 依距離計算動畫時間 */
   static durationFor(distance) {
     return distance > 0 ? Math.min(90 + distance * 38, 520) : 0;
   }
 
   /**
    * 更新機器人位置與選取狀態。
-   * @param {Record<string,{x,y}>} robots
-   * @param {string|null} selected
-   * @param {{animate?: boolean}} [opts]
-   * @returns {number} 最長動畫時間 (ms)
    */
   renderRobots(robots, selected, { animate = true } = {}) {
     let maxDur = 0;
+    // 移除不在當前 robots 字典中的殘留機器人元素（例如切換 4 色/5 色時）
+    for (const [c, g] of Object.entries(this.robotEls)) {
+      if (!robots[c]) {
+        g.remove();
+        delete this.robotEls[c];
+        delete this.positions[c];
+      }
+    }
+
     for (const [color, pos] of Object.entries(robots)) {
       const g = this._ensureRobot(color);
       const prev = this.positions[color];
@@ -278,24 +384,30 @@ export class BoardRenderer {
       this.positions[color] = { x: pos.x, y: pos.y };
       g.classList.toggle('selected', color === selected);
     }
-    // 選中者置頂
     if (selected && this.robotEls[selected]) this.layers.robots.appendChild(this.robotEls[selected]);
     return maxDur;
   }
 
-  /** 繪製滑動軌跡（淡出後自動移除） */
   drawTrail(color, path) {
     if (!path || path.length < 2) return;
     const a = this.center(path[0].x, path[0].y);
     const b = this.center(path[path.length - 1].x, path[path.length - 1].y);
-    const line = el('line', {
-      x1: a.cx, y1: a.cy, x2: b.cx, y2: b.cy, class: 'trail', stroke: ROBOT_HEX[color] ?? '#000',
-      'stroke-width': this.cell * 0.28,
-    }, this.layers.trails);
+    const line = el(
+      'line',
+      {
+        x1: a.cx,
+        y1: a.cy,
+        x2: b.cx,
+        y2: b.cy,
+        class: 'trail',
+        stroke: ROBOT_HEX[color] ?? '#fff',
+        'stroke-width': this.cell * 0.28,
+      },
+      this.layers.trails
+    );
     setTimeout(() => line.remove(), 900);
   }
 
-  /** 無法移動時的「撞牆」抖動回饋 */
   bump(color, direction) {
     const g = this.robotEls[color];
     const pos = this.positions[color];
@@ -305,13 +417,19 @@ export class BoardRenderer {
     const k = this.cell * 0.12;
     const base = `translate(${cx}px, ${cy}px)`;
     const push = `translate(${cx + d[0] * k}px, ${cy + d[1] * k}px)`;
-    g.animate([{ transform: base }, { transform: push }, { transform: base }], { duration: 160, easing: 'ease-out' });
+    g.animate([{ transform: base }, { transform: push }, { transform: base }], {
+      duration: 160,
+      easing: 'ease-out',
+    });
   }
 
-  /** 達陣慶祝效果 */
   celebrate(x, y) {
     const { cx, cy } = this.center(x, y);
-    const ring = el('circle', { cx, cy, r: this.cell * 0.4, class: 'celebrate-ring' }, this.layers.trails);
+    const ring = el(
+      'circle',
+      { cx, cy, r: this.cell * 0.4, class: 'celebrate-ring' },
+      this.layers.trails
+    );
     setTimeout(() => ring.remove(), 1200);
   }
 }

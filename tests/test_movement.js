@@ -305,6 +305,106 @@ section('9. 錯誤輸入處理');
   assert(new GameState().checkGoalReached().reason === GOAL_REASON.NO_ROUND, '未初始化時 checkGoalReached 回傳 no_round');
 }
 
+// =====================================================
+section('10. 白色機器人變體 (Silver Robot) 碰撞與達陣規則');
+{
+  const grid = emptyGrid();
+  addWall(grid, 3, 3, 'left');
+  addWall(grid, 3, 3, 'top');
+  const redTarget = { color: 'red', shape: 'circle', x: 3, y: 3 };
+  const vortexTarget = { color: 'vortex', shape: 'vortex', x: 3, y: 3 };
+
+  // (a) 白色機器人作為障礙物阻擋其他機器人
+  {
+    const robots = {
+      red: { x: 0, y: 5 },
+      blue: { x: 10, y: 10 },
+      yellow: { x: 15, y: 15 },
+      green: { x: 0, y: 15 },
+      silver: { x: 6, y: 5 },
+    };
+    const slide = calculateSlide(grid, robots, 'red', 'right');
+    assert(samePos(slide.to, { x: 5, y: 5 }), 'red 向右被 silver 機器人擋在 (5,5)');
+    assert(slide.stoppedBy === 'robot' && slide.blocker === 'silver', 'stoppedBy 為 robot 且 blocker 為 silver');
+
+    // silver 亦可被其他機器人阻擋
+    const slideSilver = calculateSlide(grid, { ...robots, blue: { x: 6, y: 8 } }, 'silver', 'down');
+    assert(samePos(slideSilver.to, { x: 6, y: 7 }), 'silver 向下被 blue 擋在 (6,7)');
+    assert(slideSilver.stoppedBy === 'robot' && slideSilver.blocker === 'blue', 'silver 被 blue 阻擋');
+  }
+
+  // (b) 白色機器人無法達成有色目標 (wrong_color)
+  {
+    const robots = {
+      red: { x: 0, y: 0 },
+      blue: { x: 2, y: 10 },
+      yellow: { x: 15, y: 15 },
+      green: { x: 0, y: 15 },
+      silver: { x: 12, y: 10 },
+    };
+    const gs = new GameState().initRound(grid, robots, redTarget);
+    gs.applyMove('silver', 'left'); // (12,10) -> (3,10) 被 blue 擋
+    gs.applyMove('silver', 'up');   // (3,10) -> (3,3) 被 (3,3).top 擋
+    assert(samePos(gs.robots.silver, { x: 3, y: 3 }), 'silver 移動 2 步抵達 (3,3)');
+    const res = gs.checkGoalReached();
+    assert(res.robot === 'silver', '停在目標格的為 silver 機器人');
+    assert(!res.success, 'silver 抵達紅色目標不可獲勝 (success=false)');
+    assert(res.reason === GOAL_REASON.WRONG_COLOR, 'silver 抵達有色目標原因為 wrong_color');
+  }
+
+  // (c) 白色機器人達成彩色漩渦目標 (vortex)
+  {
+    // 1 步直達漩渦目標：不合規 (no_ricochet)
+    const robots1 = {
+      red: { x: 0, y: 0 },
+      blue: { x: 10, y: 10 },
+      yellow: { x: 15, y: 15 },
+      green: { x: 0, y: 15 },
+      silver: { x: 3, y: 10 },
+    };
+    const gs1 = new GameState().initRound(grid, robots1, vortexTarget);
+    gs1.applyMove('silver', 'up'); // 1 步直達 (3,3)
+    const res1 = gs1.checkGoalReached();
+    assert(samePos(gs1.robots.silver, { x: 3, y: 3 }), 'silver 1 步抵達漩渦');
+    assert(!res1.success && res1.reason === GOAL_REASON.NO_RICOCHET, 'silver 1 步直達漩渦不合規 (no_ricochet)');
+
+    // 2 步轉向達陣漩渦目標：成功獲勝！
+    const robots2 = {
+      red: { x: 0, y: 0 },
+      blue: { x: 2, y: 10 },
+      yellow: { x: 15, y: 15 },
+      green: { x: 0, y: 15 },
+      silver: { x: 12, y: 10 },
+    };
+    const gs2 = new GameState().initRound(grid, robots2, vortexTarget);
+    gs2.applyMove('silver', 'left'); // 轉向第 1 步 -> (3,10)
+    gs2.applyMove('silver', 'up');   // 轉向第 2 步 -> (3,3)
+    const res2 = gs2.checkGoalReached();
+    assert(res2.success, 'silver 移動 2 步達成漩渦目標成功 (success=true)');
+    assert(res2.robot === 'silver', '達陣機器人為 silver');
+    assert(res2.reason === GOAL_REASON.SUCCESS, '原因為 success');
+  }
+
+  // (d) 5 台機器人回合重設與歷史維護
+  {
+    const robots = {
+      red: { x: 0, y: 0 },
+      blue: { x: 1, y: 0 },
+      yellow: { x: 2, y: 0 },
+      green: { x: 3, y: 0 },
+      silver: { x: 4, y: 0 },
+    };
+    const gs = new GameState().initRound(grid, robots, redTarget);
+    assert(Object.keys(gs.getRobots()).length === 5, 'GameState 支援 5 台機器人');
+    gs.applyMove('silver', 'down');
+    assert(gs.robots.silver.y === 15, 'silver 滑動至底部');
+    assert(gs.countMovesOf('silver') === 1, 'silver 移動計數為 1');
+    gs.resetToInitial();
+    assert(samePos(gs.robots.silver, { x: 4, y: 0 }), 'resetToInitial 成功復原 silver 起點');
+    assert(gs.moveCount === 0, '步數歸零');
+  }
+}
+
 section('測試結果');
 console.log(`  通過: ${passed}  失敗: ${failed}`);
 if (failed > 0) process.exit(1);

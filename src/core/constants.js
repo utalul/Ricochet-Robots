@@ -51,6 +51,8 @@ export const COLORS = Object.freeze({
   GREEN: 'green',
   BLUE: 'blue',
   YELLOW: 'yellow',
+  SILVER: 'silver',
+  WHITE: 'silver',
   /** 彩色漩渦（任意顏色機器人皆可抵達） */
   MULTI: 'multi',
 });
@@ -58,8 +60,14 @@ export const COLORS = Object.freeze({
 /** 漩渦目標可能使用的顏色標記（相容 Step1 資料的 'multi' 與規格的 'vortex'） */
 export const VORTEX_COLORS = Object.freeze(['vortex', 'multi']);
 
-/** 4 台機器人的顏色 */
+/** 基礎 4 台機器人的顏色 */
 export const ROBOT_COLORS = Object.freeze(['red', 'blue', 'yellow', 'green']);
+
+/** 包含白色／銀色變體的 5 台機器人顏色 */
+export const ROBOT_COLORS_5 = Object.freeze(['red', 'blue', 'yellow', 'green', 'silver']);
+
+/** 所有可能機器人顏色清單 */
+export const ALL_ROBOT_COLORS = Object.freeze(['red', 'blue', 'yellow', 'green', 'silver']);
 
 /** 移動方向 */
 export const DIRECTIONS = Object.freeze({
@@ -92,6 +100,8 @@ export const COLOR_HEX = Object.freeze({
   green: '#43a047',
   blue: '#1e88e5',
   yellow: '#fdd835',
+  silver: '#cfd8dc',
+  white: '#cfd8dc',
   multi: '#8e24aa',
 });
 

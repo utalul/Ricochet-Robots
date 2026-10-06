@@ -68,6 +68,9 @@ export class RoomState {
     this.completedTargets = [];
     this.totalTargetsCount = 17;
 
+    /** 是否啟用白色機器人變體 */
+    this.useSilver = false;
+
     /** 舊版相容屬性 */
     this.activeDemonstratorId = null;
     this.demonstrationIndex = 0;
@@ -93,6 +96,7 @@ export class RoomState {
     round,
     duration = 120,
     targetDeck = null,
+    useSilver = false,
     phase = ROOM_PHASE.RACING,
   }) {
     if (!grid || !initialRobots || !target) {
@@ -101,6 +105,7 @@ export class RoomState {
     this.grid = grid;
     this.initialRobots = cloneRobots(initialRobots);
     this.target = { ...target };
+    this.useSilver = Boolean(useSilver || (initialRobots && initialRobots.silver));
     if (typeof round === 'number') this.round = round;
     if (Array.isArray(targetDeck)) this.targetDeck = [...targetDeck];
 
@@ -539,6 +544,7 @@ export class RoomState {
       roundWinner: this.roundWinner ? { ...this.roundWinner } : null,
       roundWinners: this.roundWinners.map((w) => ({ ...w })),
       isDraw: this.isDraw,
+      useSilver: this.useSilver,
       completedTargetsCount: this.completedTargets.length,
       remainingTargetsCount: this.targetDeck ? this.targetDeck.length : 0,
       totalTargetsCount: this.totalTargetsCount,
@@ -552,6 +558,7 @@ export class RoomState {
     this.round = snapshot.round || 1;
     this.target = snapshot.target ? { ...snapshot.target } : null;
     this.initialRobots = snapshot.initialRobots ? cloneRobots(snapshot.initialRobots) : null;
+    this.useSilver = Boolean(snapshot.useSilver || (snapshot.initialRobots && snapshot.initialRobots.silver));
     this.countdownEnd = snapshot.countdownEnd;
     this.countdownDuration = snapshot.countdownDuration || 120;
     this.activeDemonstratorId = snapshot.activeDemonstratorId;

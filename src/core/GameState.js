@@ -1,6 +1,6 @@
 /**
  * GameState
- * 單回合狀態管理：目標、機器人位置、步數、歷史紀錄、復原與重設、達陣檢核。
+ * 單回合狀態管理：目標、機器人位置（支援 4 色或 5 色白/銀機器人變體）、步數、歷史紀錄、復原與重設、達陣檢核。
  */
 import { calculateSlide, cloneRobots, isValidDirection } from './MovementEngine.js';
 import { ROBOT_COLORS, VORTEX_COLORS } from './constants.js';
@@ -10,11 +10,11 @@ export const GOAL_REASON = Object.freeze({
   SUCCESS: 'success',
   NO_ROUND: 'no_round',         // 尚未初始化回合
   NOT_REACHED: 'not_reached',   // 沒有機器人停在目標格
-  WRONG_COLOR: 'wrong_color',   // 停在目標格的機器人顏色不符
+  WRONG_COLOR: 'wrong_color',   // 停在目標格的機器人顏色不符（包含白色機器人停在彩色符號上）
   NO_RICOCHET: 'no_ricochet',   // 未轉向（0 步或 1 步直達），不合規
 });
 
-/** 目標是否為彩色漩渦（任意顏色皆可達陣） */
+/** 目標是否為彩色漩渦（任意顏色機器人皆可達陣） */
 export function isVortexTarget(target) {
   return !!target && (VORTEX_COLORS.includes(target.color) || target.shape === 'vortex');
 }
@@ -32,17 +32,27 @@ export class GameState {
   /**
    * 初始化回合。
    * @param {Array<Array<object>>} grid 16×16 大地圖
-   * @param {Record<string,{x:number,y:number}>} initialRobots 回合起點位置
+   * @param {Record<string,{x:number,y:number}>} initialRobots 回合起點位置（支援 4 台或含白色機器人 5 台）
    * @param {{color:string, shape:string, x:number, y:number}} target 回合目標
    */
   initRound(grid, initialRobots, target) {
     if (!Array.isArray(grid) || grid.length === 0) throw new Error('Invalid grid');
+    if (!initialRobots || typeof initialRobots !== 'object') throw new Error('Invalid initialRobots');
     const size = grid.length;
-    const inBounds = (p) => Number.isInteger(p?.x) && Number.isInteger(p?.y) && p.x >= 0 && p.y >= 0 && p.x < size && p.y < size;
+    const inBounds = (p) =>
+      Number.isInteger(p?.x) &&
+      Number.isInteger(p?.y) &&
+      p.x >= 0 &&
+      p.y >= 0 &&
+      p.x < size &&
+      p.y < size;
+
+    const robotKeys = Object.keys(initialRobots);
+    if (robotKeys.length < 4) throw new Error('At least 4 robots required');
 
     const seen = new Set();
-    for (const color of ROBOT_COLORS) {
-      const p = initialRobots?.[color];
+    for (const color of robotKeys) {
+      const p = initialRobots[color];
       if (!inBounds(p)) throw new Error(`Robot ${color} missing or out of bounds`);
       if (grid[p.y][p.x].blocked) throw new Error(`Robot ${color} placed on center hub`);
       const key = `${p.x},${p.y}`;
@@ -79,7 +89,7 @@ export class GameState {
    */
   applyMove(color, direction) {
     this._ensureRound();
-    if (!ROBOT_COLORS.includes(color)) throw new Error(`Unknown robot: ${color}`);
+    if (!this.robots || !this.robots[color]) throw new Error(`Unknown robot: ${color}`);
     if (!isValidDirection(direction)) throw new Error(`Invalid direction: ${direction}`);
 
     const slide = calculateSlide(this.grid, this.robots, color, direction);
@@ -124,27 +134,45 @@ export class GameState {
    * 達陣檢核。
    * 規則：
    *   1. 有機器人停在 target 座標
-   *   2. 顏色相符（漩渦目標任意顏色皆可）
-   *   3. 至少轉向一次：抵達目標的那台機器人本身移動次數必須 ≥ 2
-   *      （即使總步數 > 1，若該機器人只移動 1 次即達陣，仍判定 no_ricochet）
+   *   2. 顏色相符：
+   *      - 彩色漩渦目標（vortex）：紅、藍、黃、綠、白/銀 5 台機器人皆可達陣。
+   *      - 特定顏色符號（紅、藍、黃、綠）：只有該色機器人可以達陣；白色機器人停在目標格上不算達陣。
+   *   3. 至少轉向一次：抵達目標的那台機器人本身移動次數必須 ≥ 2。
    * @returns {{success:boolean, reached:boolean, robot:string|null, robotMoves:number, reason:string}}
    */
   checkGoalReached() {
-    if (!this.grid || !this.target) {
+    if (!this.grid || !this.target || !this.robots) {
       return { success: false, reached: false, robot: null, robotMoves: 0, reason: GOAL_REASON.NO_ROUND };
     }
     const { x, y } = this.target;
     const vortex = isVortexTarget(this.target);
-    const onTarget = ROBOT_COLORS.filter((c) => this.robots[c].x === x && this.robots[c].y === y);
+    const robotKeys = Object.keys(this.robots);
+    const onTarget = robotKeys.filter((c) => this.robots[c] && this.robots[c].x === x && this.robots[c].y === y);
 
     if (onTarget.length === 0) {
       return { success: false, reached: false, robot: null, robotMoves: 0, reason: GOAL_REASON.NOT_REACHED };
     }
-    const robot = vortex ? onTarget[0] : onTarget.find((c) => c === this.target.color) ?? null;
+
+    // 彩色漩渦：任意機器人（包含白色）皆可達陣
+    // 特定顏色目標：只有該目標顏色之機器人可達陣，白色機器人不算達陣
+    let robot = null;
+    if (vortex) {
+      robot = onTarget[0];
+    } else {
+      robot = onTarget.find((c) => c === this.target.color) ?? null;
+    }
+
     if (!robot) {
       const other = onTarget[0];
-      return { success: false, reached: false, robot: other, robotMoves: this.countMovesOf(other), reason: GOAL_REASON.WRONG_COLOR };
+      return {
+        success: false,
+        reached: false,
+        robot: other,
+        robotMoves: this.countMovesOf(other),
+        reason: GOAL_REASON.WRONG_COLOR,
+      };
     }
+
     const robotMoves = this.countMovesOf(robot);
     if (robotMoves < 2) {
       return { success: false, reached: true, robot, robotMoves, reason: GOAL_REASON.NO_RICOCHET };

@@ -47,10 +47,18 @@
         </div>
       </div>
 
+      <!-- 變體開關卡片 -->
+      <div class="card" id="variant-card" style="padding: 9px 12px;">
+        <label for="toggle-silver-robot" style="cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 0.88rem;">
+          <input type="checkbox" id="toggle-silver-robot" />
+          <span>☑ 啟用白色機器人變體 (Silver Robot)</span>
+        </label>
+      </div>
+
       <!-- 機器人選取卡片 -->
       <div class="card">
-        <div class="label">選擇機器人 <span class="hint">（點棋盤或按 1–4）</span></div>
-        <div class="robot-select">
+        <div class="label" id="robot-select-label">選擇機器人 <span class="hint">（點棋盤或按 1–4）</span></div>
+        <div class="robot-select" id="robot-select-container">
           <button type="button" class="robot-btn" data-select="red" aria-pressed="false">
             <span class="dot red"></span><span class="name">紅</span><kbd>1</kbd><span class="count" data-count="red">0</span>
           </button>
@@ -62,6 +70,9 @@
           </button>
           <button type="button" class="robot-btn" data-select="green" aria-pressed="false">
             <span class="dot green"></span><span class="name">綠</span><kbd>4</kbd><span class="count" data-count="green">0</span>
+          </button>
+          <button type="button" class="robot-btn" data-select="silver" id="btn-robot-silver" aria-pressed="false" style="display: none;">
+            <span class="dot silver"></span><span class="name">白</span><kbd>5</kbd><span class="count" data-count="silver">0</span>
           </button>
         </div>
       </div>

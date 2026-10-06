@@ -1,9 +1,9 @@
 /**
  * RoundFactory
- * 隨機開局工具：子版圖洗牌、機器人隨機落點、目標牌堆。
+ * 隨機開局工具：子版圖洗牌、機器人隨機落點（支援 4 色或 5 色白/銀機器人變體）、目標牌堆。
  * 所有函式皆接受可注入的 rng（預設 Math.random），方便測試重現。
  */
-import { ROBOT_COLORS } from './constants.js';
+import { ROBOT_COLORS, ROBOT_COLORS_5 } from './constants.js';
 
 /** Fisher–Yates 洗牌，回傳新陣列 */
 export function shuffle(array, rng = Math.random) {
@@ -34,21 +34,35 @@ export function pickQuadrantBoards(boards, rng = Math.random) {
 }
 
 /**
- * 為 4 台機器人隨機挑選不重疊、非卡榫、非目標格的起點。
+ * 為機器人隨機挑選不重疊、非卡榫、非目標格的起點。
+ * 支援 4 色或選用白色機器人變體（5 台）。
  * @param {Array<Array<object>>} grid
- * @param {() => number} rng
+ * @param {() => number} [rng]
+ * @param {boolean|{useSilver?:boolean, colors?:string[]}} [options]
  */
-export function randomRobotPositions(grid, rng = Math.random) {
+export function randomRobotPositions(grid, rng = Math.random, options = {}) {
+  let robotColors = ROBOT_COLORS;
+  if (Array.isArray(options)) {
+    robotColors = options;
+  } else if (typeof options === 'boolean') {
+    robotColors = options ? ROBOT_COLORS_5 : ROBOT_COLORS;
+  } else if (options && typeof options === 'object') {
+    if (options.colors) robotColors = options.colors;
+    else if (options.useSilver) robotColors = ROBOT_COLORS_5;
+  }
+
   const candidates = [];
   for (const row of grid) {
     for (const cell of row) {
       if (!cell.blocked && !cell.target) candidates.push({ x: cell.x, y: cell.y });
     }
   }
-  if (candidates.length < ROBOT_COLORS.length) throw new Error('Not enough free cells for robots');
-  const picked = shuffle(candidates, rng).slice(0, ROBOT_COLORS.length);
+  if (candidates.length < robotColors.length) throw new Error('Not enough free cells for robots');
+  const picked = shuffle(candidates, rng).slice(0, robotColors.length);
   const robots = {};
-  ROBOT_COLORS.forEach((c, i) => { robots[c] = picked[i]; });
+  robotColors.forEach((c, i) => {
+    robots[c] = picked[i];
+  });
   return robots;
 }
 

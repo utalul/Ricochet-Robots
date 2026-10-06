@@ -1,14 +1,28 @@
 /**
  * InputController
  * 統一處理鍵盤、滑鼠/觸控（點擊、滑動手勢）與畫面按鈕，轉換成語意化的回呼。
- * 不含任何遊戲規則：是否允許動作由回呼端（main.js）決定。
+ * 支援 1~5 號鍵選取機器人（包含 5 號白色／銀色機器人）。
  */
 
 const KEY_TO_DIRECTION = Object.freeze({
-  ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
-  w: 'up', s: 'down', a: 'left', d: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  w: 'up',
+  s: 'down',
+  a: 'left',
+  d: 'right',
 });
-const KEY_TO_ROBOT = Object.freeze({ 1: 'red', 2: 'blue', 3: 'yellow', 4: 'green' });
+
+const KEY_TO_ROBOT = Object.freeze({
+  1: 'red',
+  2: 'blue',
+  3: 'yellow',
+  4: 'green',
+  5: 'silver',
+});
+
 const SWIPE_THRESHOLD_PX = 24;
 
 export class InputController {
@@ -21,7 +35,14 @@ export class InputController {
    * @param {() => string|null} opts.getSelected
    * @param {object} opts.handlers { select, move, undo, reset, next, newGame, confirm, cancel }
    */
-  constructor({ boardElement, controlsRoot = document, cellFromClient, getRobots, getSelected, handlers }) {
+  constructor({
+    boardElement,
+    controlsRoot = document,
+    cellFromClient,
+    getRobots,
+    getSelected,
+    handlers,
+  }) {
     this.board = boardElement;
     this.controlsRoot = controlsRoot;
     this.cellFromClient = cellFromClient;
@@ -33,7 +54,9 @@ export class InputController {
     this._onKeyDown = this._onKeyDown.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
-    this._onPointerCancel = () => { this._pointer = null; };
+    this._onPointerCancel = () => {
+      this._pointer = null;
+    };
     this._onClick = this._onClick.bind(this);
   }
 
@@ -68,7 +91,7 @@ export class InputController {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
     if (KEY_TO_DIRECTION[key]) {
-      e.preventDefault(); // 避免方向鍵捲動頁面
+      e.preventDefault();
       if (!e.repeat) this._call('move', KEY_TO_DIRECTION[key]);
       return;
     }
@@ -78,13 +101,30 @@ export class InputController {
       return;
     }
     switch (key) {
-      case 'z': e.preventDefault(); this._call('undo'); break;
-      case 'r': e.preventDefault(); this._call('reset'); break;
-      case 'n': e.preventDefault(); this._call('next'); break;
-      case 'm': e.preventDefault(); this._call('newGame'); break;
-      case 'Enter': this._call('confirm', e); break;
-      case 'Escape': this._call('cancel', e); break;
-      default: break;
+      case 'z':
+        e.preventDefault();
+        this._call('undo');
+        break;
+      case 'r':
+        e.preventDefault();
+        this._call('reset');
+        break;
+      case 'n':
+        e.preventDefault();
+        this._call('next');
+        break;
+      case 'm':
+        e.preventDefault();
+        this._call('newGame');
+        break;
+      case 'Enter':
+        this._call('confirm', e);
+        break;
+      case 'Escape':
+        this._call('cancel', e);
+        break;
+      default:
+        break;
     }
   }
 
@@ -102,17 +142,22 @@ export class InputController {
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
 
-    // 滑動手勢：從機器人上開始滑 → 先選取該機器人再移動
     if (Math.hypot(dx, dy) >= SWIPE_THRESHOLD_PX) {
       const startCell = this.cellFromClient(start.x, start.y);
       const robotOnStart = startCell && this._robotAt(startCell);
       if (robotOnStart) this._call('select', robotOnStart);
-      const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+      const dir =
+        Math.abs(dx) > Math.abs(dy)
+          ? dx > 0
+            ? 'right'
+            : 'left'
+          : dy > 0
+          ? 'down'
+          : 'up';
       this._call('move', dir);
       return;
     }
 
-    // 點擊
     const cell = this.cellFromClient(e.clientX, e.clientY);
     if (!cell) return;
     const robot = this._robotAt(cell);
@@ -120,12 +165,13 @@ export class InputController {
       this._call('select', robot);
       return;
     }
-    // 點擊與選中機器人同列/同欄的格子 → 朝該方向滑動
     const selected = this.getSelected();
     const pos = selected && this.getRobots()[selected];
     if (!pos) return;
-    if (cell.x === pos.x && cell.y !== pos.y) this._call('move', cell.y < pos.y ? 'up' : 'down');
-    else if (cell.y === pos.y && cell.x !== pos.x) this._call('move', cell.x < pos.x ? 'left' : 'right');
+    if (cell.x === pos.x && cell.y !== pos.y)
+      this._call('move', cell.y < pos.y ? 'up' : 'down');
+    else if (cell.y === pos.y && cell.x !== pos.x)
+      this._call('move', cell.x < pos.x ? 'left' : 'right');
   }
 
   _robotAt(cell) {

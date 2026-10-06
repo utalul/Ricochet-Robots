@@ -28,6 +28,8 @@ const COLOR_NAMES = Object.freeze({
   blue: '藍色',
   yellow: '黃色',
   green: '綠色',
+  silver: '白色',
+  white: '白色',
   multi: '彩色',
   vortex: '彩色',
 });
@@ -37,6 +39,8 @@ const ROBOT_NAMES = Object.freeze({
   blue: '藍',
   yellow: '黃',
   green: '綠',
+  silver: '白',
+  white: '白',
 });
 
 const SHAPE_NAMES = Object.freeze({
@@ -73,6 +77,12 @@ const elBtnNext = document.getElementById('btn-next');
 const elBtnNewGame = document.getElementById('btn-newgame');
 const elToast = document.getElementById('toast');
 
+// 白色機器人變體元件
+const elToggleSilver = document.getElementById('toggle-silver-robot');
+const elBtnRobotSilver = document.getElementById('btn-robot-silver');
+const elRobotSelectContainer = document.getElementById('robot-select-container');
+const elRobotSelectLabel = document.getElementById('robot-select-label');
+
 // 單人通關彈窗
 const elModal = document.getElementById('modal');
 const elModalTitle = document.getElementById('modal-title');
@@ -95,10 +105,11 @@ const elBtnRestartGame = document.getElementById('btn-restart-game');
 const elBtnCloseGameOver = document.getElementById('btn-close-gameover');
 
 const elMpContainer = document.getElementById('mp-container');
-const robotButtons = Array.from(document.querySelectorAll('.robot-btn'));
+let robotButtons = Array.from(document.querySelectorAll('.robot-btn'));
 
 // ---------- 全域狀態 ----------
 let currentMode = 'solo'; // 'solo' | 'multi'
+let useSilverRobot = false; // 是否啟用白色機器人變體
 
 // 地圖與牌庫
 let allBoards = [];
@@ -292,11 +303,29 @@ function updateHUD() {
   }
 }
 
+function updateRobotVariantUI(useSilver) {
+  useSilverRobot = Boolean(useSilver);
+  if (elToggleSilver) elToggleSilver.checked = useSilverRobot;
+  if (elBtnRobotSilver) elBtnRobotSilver.style.display = useSilverRobot ? 'flex' : 'none';
+  if (elRobotSelectContainer) elRobotSelectContainer.classList.toggle('has-silver', useSilverRobot);
+  if (elRobotSelectLabel) {
+    elRobotSelectLabel.innerHTML = useSilverRobot
+      ? '選擇機器人 <span class="hint">（點棋盤或按 1–5）</span>'
+      : '選擇機器人 <span class="hint">（點棋盤或按 1–4）</span>';
+  }
+  robotButtons = Array.from(document.querySelectorAll('.robot-btn'));
+  if (!useSilverRobot && selectedRobot === 'silver') {
+    selectedRobot = 'red';
+  }
+}
+
 /** 切換選取的機器人 */
 function selectRobot(color) {
-  if (!ROBOT_COLORS.includes(color)) return;
-  selectedRobot = color;
+  if (color === 'white') color = 'silver';
   const activeGame = getActiveGameState();
+  const available = activeGame?.grid ? Object.keys(activeGame.getRobots()) : ROBOT_COLORS;
+  if (!available.includes(color)) return;
+  selectedRobot = color;
   if (activeGame?.grid) {
     renderer?.renderRobots(activeGame.getRobots(), selectedRobot, { animate: false });
   }
@@ -329,6 +358,7 @@ function switchGameMode(mode) {
 
     // 若已在房間中，呈現多人遊戲棋盤
     if (mpHUD?.inRoom && roomState.grid) {
+      updateRobotVariantUI(Boolean(roomState.useSilver));
       renderer.setBoard(roomState.grid);
       renderer.setTarget(roomState.target);
       renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
@@ -342,6 +372,7 @@ function switchGameMode(mode) {
     }
   } else {
     // 切換回單人自由模式
+    updateRobotVariantUI(Boolean(elToggleSilver?.checked));
     if (elAppSubtitle) {
       elAppSubtitle.textContent =
         '🕹️ 單人自由模式 · 無時間限制、自由試走、復原與洗牌';
@@ -551,7 +582,9 @@ function handleNewGame() {
     currentGrid = assembleBigBoard(...currentQuadBoards);
     const targets = collectTargets(currentGrid);
     targetDeck = createTargetDeck(targets);
-    const initialRobots = randomRobotPositions(currentGrid);
+    const initialRobots = randomRobotPositions(currentGrid, Math.random, {
+      useSilver: useSilverRobot,
+    });
     currentTarget = drawTarget(targetDeck, initialRobots);
     soloSolvedCount = 0;
 
@@ -630,6 +663,12 @@ function setupMultiplayerNetwork() {
 
       roomState.deserialize(payload.snapshot, currentGrid);
       const target = roomState.target;
+      const useSilver = Boolean(
+        payload.snapshot?.useSilver ||
+          (payload.snapshot?.initialRobots && payload.snapshot.initialRobots.silver)
+      );
+      updateRobotVariantUI(useSilver);
+      if (mpHUD) mpHUD.setVariant(useSilver);
 
       if (target) {
         renderer.setTarget(target);
@@ -674,12 +713,19 @@ function setupMultiplayerNetwork() {
       renderer.setBoard(currentGrid);
     }
 
+    const useSilver = Boolean(
+      payload.useSilver || (payload.initialRobots && payload.initialRobots.silver)
+    );
+    updateRobotVariantUI(useSilver);
+    if (mpHUD) mpHUD.setVariant(useSilver);
+
     roomState.startRound({
       grid: currentGrid,
       initialRobots: payload.initialRobots,
       target: payload.target,
       round: payload.round,
       duration: payload.duration || 120,
+      useSilver,
     });
 
     localMultiGameState.initRound(currentGrid, payload.initialRobots, payload.target);
@@ -749,6 +795,9 @@ function setupMultiplayerNetwork() {
     hideRoundModal();
     if (payload.snapshot) {
       roomState.deserialize(payload.snapshot, currentGrid);
+      const useSilver = Boolean(roomState.useSilver);
+      updateRobotVariantUI(useSilver);
+      if (mpHUD) mpHUD.setVariant(useSilver);
     }
     mpHUD.updatePlayers(roomState.getPlayerList(), roomManager.isHost);
     showToast('房主已重啟新的一局！17 題重新開跑！', 'success', 3000);
@@ -805,10 +854,15 @@ function startMultiplayerRound() {
     roomState.setTargetDeck(createTargetDeck(allTargets));
   }
 
+  const useSilver = Boolean(roomState.useSilver);
+  updateRobotVariantUI(useSilver);
+  if (mpHUD) mpHUD.setVariant(useSilver);
+
   // 機器人保留在當前位置做為新回合起點 (桌遊官方規則)
   const nextInitialRobots = localMultiGameState.grid
     ? localMultiGameState.getRobots()
-    : roomState.initialRobots || randomRobotPositions(currentGrid);
+    : roomState.initialRobots ||
+      randomRobotPositions(currentGrid, Math.random, { useSilver });
 
   const nextTarget = drawTarget(roomState.targetDeck, nextInitialRobots);
   if (!nextTarget) {
@@ -826,6 +880,7 @@ function startMultiplayerRound() {
     target: nextTarget,
     round: roundNum,
     duration: 120,
+    useSilver,
   });
 
   localMultiGameState.initRound(currentGrid, nextInitialRobots, nextTarget);
@@ -859,6 +914,7 @@ function startMultiplayerRound() {
     initialRobots: nextInitialRobots,
     target: nextTarget,
     duration: 120,
+    useSilver,
   });
 
   showToast(`🔔 第 ${roundNum} 題開始！2 分鐘同步競速倒數！`, 'info', 3200);
@@ -931,11 +987,15 @@ async function init() {
         reset: () => handleReset(),
         nextRound: () => startMultiplayerRound(),
         countdownExpired: () => handleCountdownExpired(),
-        createRoom: async ({ roomId, userName }) => {
+        createRoom: async ({ roomId, userName, useSilver }) => {
           try {
             const info = await roomManager.createRoom(roomId, userName);
+            roomState.useSilver = Boolean(useSilver);
+            updateRobotVariantUI(useSilver);
+            info.useSilver = Boolean(useSilver);
             roomState.addPlayer({ id: info.userId, name: info.userName, isHost: true });
             mpHUD.setInRoom(true, info);
+            mpHUD.setVariant(Boolean(useSilver));
             mpHUD.updatePlayers(roomState.getPlayerList(), true);
             showToast(`房間【${roomId}】建立成功！您是房主 👑`, 'success');
             startMultiplayerRound();
@@ -959,6 +1019,7 @@ async function init() {
         leaveRoom: async () => {
           await roomManager.leaveRoom();
           mpHUD.setInRoom(false);
+          updateRobotVariantUI(Boolean(elToggleSilver?.checked));
           showToast('已離開房間', 'info');
         },
         settingsChanged: async ({ url, key }) => {
@@ -987,6 +1048,21 @@ async function init() {
     // 頂部模式切換按鈕事件
     elTabSolo.addEventListener('click', () => switchGameMode('solo'));
     elTabMulti.addEventListener('click', () => switchGameMode('multi'));
+
+    // 白色機器人變體選用開關 (單人模式)
+    elToggleSilver?.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      updateRobotVariantUI(checked);
+      if (currentMode === 'solo') {
+        handleNewGame();
+        showToast(
+          checked
+            ? '已啟用白色機器人變體（已重新開始新局）'
+            : '已關閉白色機器人變體（已重新開始新局）',
+          'info'
+        );
+      }
+    });
 
     // 彈窗按鈕事件綁定
     elBtnRoundModalNext?.addEventListener('click', () => {

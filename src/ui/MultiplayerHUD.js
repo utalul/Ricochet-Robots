@@ -58,6 +58,12 @@ export class MultiplayerHUD {
             <label for="mp-roomid">房間代碼：</label>
             <input type="text" id="mp-roomid" placeholder="例如：101" maxlength="16" />
           </div>
+          <div class="form-row" style="margin-top: 4px; margin-bottom: 6px;">
+            <label for="mp-use-silver" style="width: auto; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 0.88rem;">
+              <input type="checkbox" id="mp-use-silver" />
+              <span>☑ 啟用白色機器人變體 (Silver Robot)</span>
+            </label>
+          </div>
           <div class="lobby-actions">
             <button type="button" id="btn-create-room" class="primary">建立新房間</button>
             <button type="button" id="btn-join-room">加入房間</button>
@@ -73,6 +79,7 @@ export class MultiplayerHUD {
             <div>
               <span class="room-title">房間：<strong id="mp-room-title">---</strong></span>
               <span id="mp-net-badge" class="badge">廣播頻道</span>
+              <span id="mp-variant-badge" class="badge" style="background: #455a64; color: #eceff1; display: none;">⚪ 白機器人</span>
             </div>
             <div class="room-header-btns">
               <button type="button" id="btn-room-cloud-settings" class="btn-sm" title="雲端連線設定">⚙️ 設定</button>
@@ -178,9 +185,11 @@ export class MultiplayerHUD {
 
     this.inputName = this.container.querySelector('#mp-username');
     this.inputRoom = this.container.querySelector('#mp-roomid');
+    this.inputUseSilver = this.container.querySelector('#mp-use-silver');
 
     this.roomTitle = this.container.querySelector('#mp-room-title');
     this.netBadge = this.container.querySelector('#mp-net-badge');
+    this.variantBadge = this.container.querySelector('#mp-variant-badge');
     this.playerCount = this.container.querySelector('#mp-player-count');
     this.playerChips = this.container.querySelector('#mp-player-chips');
 
@@ -212,7 +221,8 @@ export class MultiplayerHUD {
     this.container.querySelector('#btn-create-room').addEventListener('click', () => {
       const name = this._saveAndGetName();
       const roomId = this.inputRoom.value.trim() || String(Math.floor(1000 + Math.random() * 9000));
-      this._call('createRoom', { roomId, userName: name });
+      const useSilver = Boolean(this.inputUseSilver?.checked);
+      this._call('createRoom', { roomId, userName: name, useSilver });
     });
 
     // 加入房間
@@ -355,14 +365,22 @@ export class MultiplayerHUD {
     if (inRoom && info) {
       this.roomTitle.textContent = info.roomId;
       this.netBadge.textContent = info.mode.includes('Supabase') ? '☁ Supabase' : '⚡ 本地分頁廣播';
+      this.setVariant(Boolean(info.useSilver));
       if (history.replaceState) {
         history.replaceState(null, '', `#room=${info.roomId}`);
       }
     } else {
+      this.setVariant(false);
       this.stopTimer();
       if (history.replaceState) {
         history.replaceState(null, '', window.location.pathname);
       }
+    }
+  }
+
+  setVariant(useSilver) {
+    if (this.variantBadge) {
+      this.variantBadge.style.display = useSilver ? 'inline-block' : 'none';
     }
   }
 

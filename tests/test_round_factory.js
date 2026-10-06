@@ -14,7 +14,7 @@ import {
   createTargetDeck,
   drawTarget,
 } from '../src/core/RoundFactory.js';
-import { ROBOT_COLORS } from '../src/core/constants.js';
+import { ROBOT_COLORS, ROBOT_COLORS_5 } from '../src/core/constants.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -102,6 +102,36 @@ section('4. createTargetDeck 與 drawTarget');
   assert(drawn !== null, '成功抽取目標');
   assert(!(drawn.x === robots.red.x && drawn.y === robots.red.y), '跳過已有機器人站立之目標');
   assert(deck.length === targets.length - 1, '牌堆長度減少 1');
+}
+
+// =====================================================
+section('5. randomRobotPositions 白色機器人變體 (Silver Robot)');
+{
+  const grid = assembleBigBoard(...sampleBoards.slice(0, 4));
+  const robots5 = randomRobotPositions(grid, Math.random, { useSilver: true });
+  const keys5 = Object.keys(robots5);
+  assert(keys5.length === 5, '啟用變體時包含 5 台機器人');
+  assert(keys5.includes('silver'), '包含 silver (白色) 機器人');
+  assert(ROBOT_COLORS_5.every((c) => keys5.includes(c)), '包含 ROBOT_COLORS_5 所有顏色');
+
+  const positions5 = Object.values(robots5);
+  const uniqueKeys5 = new Set(positions5.map((p) => `${p.x},${p.y}`));
+  assert(uniqueKeys5.size === 5, '5 台機器人起點互不重疊');
+
+  const notBlocked5 = positions5.every((p) => !grid[p.y][p.x].blocked);
+  assert(notBlocked5, '5 台機器人皆不在中央卡榫');
+
+  const notTarget5 = positions5.every((p) => !grid[p.y][p.x].target);
+  assert(notTarget5, '5 台機器人起點皆不在目標格上');
+
+  // 未啟用變體時
+  const robots4 = randomRobotPositions(grid, Math.random, { useSilver: false });
+  assert(Object.keys(robots4).length === 4, '關閉變體時維持 4 台機器人');
+  assert(!('silver' in robots4), '未啟用變體時不含 silver 機器人');
+
+  // 支援布林參數語法
+  const robotsBool = randomRobotPositions(grid, Math.random, true);
+  assert(Object.keys(robotsBool).length === 5 && 'silver' in robotsBool, '支援布林參數啟用變體');
 }
 
 section('測試結果');
