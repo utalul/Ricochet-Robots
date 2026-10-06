@@ -1,23 +1,32 @@
 /**
  * RoomState.js
- * 碰撞機器人多人連線房間狀態機。
+ * 碰撞機器人多人連線房間狀態機（升級版：全員 2 分鐘同步競速模式＋17 題終局結算）。
  *
- * 房間四階段：
- * 1. THINKING: 自由思考期，翻開新目標，機器人起點固定，棋盤鎖死不可移動，玩家可下注步數。
- * 2. COUNTDOWN: 60 秒沙漏期，第一位下注者觸發，全體倒數。可繼續下注（個人新下注必須 < 前一次）。即時排序。
- * 3. DEMONSTRATING: 路徑展示期，下注鎖定。排行榜第一名獲得獨占操作鎖 (Mutex Lock)，其餘觀看。
- *    - 成功：剛好等於下注步數達陣（且符合轉向規則），得標並進 ROUND_END。
- *    - 失敗/放棄：步數超過或點擊放棄，機器人彈回起點，操作權依序轉移至次順位玩家。全員失敗則無人得標。
- * 4. ROUND_END: 結算期，顯示得主與得分，固定機器人位置，準備下一輪。
+ * 房間三大階段：
+ * 1. RACING: 全員 2 分鐘 (120 秒) 同步試走競賽期。
+ *    - 各玩家在本地棋盤獨立試走，不受他人干擾。
+ *    - 玩家達陣且符合轉向規則 (目標機器人移動次數 >= 2) 時，系統自動記錄並廣播個人最佳步數 (PB)。
+ *    - 玩家可隨時復原 (Z) 或重回起點 (R) 繼續尋求更少步數更新 PB。
+ *    - 即時排行榜維護：步數由少到多、時間由先到後排序。
+ * 2. ROUND_END: 回合結算期。
+ *    - 120 秒倒數結束或全員結算，全體棋盤鎖定。
+ *    - 自動比對排行榜：步數最少者獲勝 (+1 分)；若有平手則共同獲勝（各得 1 分）。
+ *    - 目標圓片自 17 片牌堆中移除；若流標（無人達陣）則洗回牌堆。
+ *    - 等待開始下一題（機器人保留在當前位置作為新回合起點）。
+ * 3. GAME_OVER: 終局頒獎期。
+ *    - 17 片目標圓片全數被贏得後觸發，彈出頒獎終局視窗，展示總排名與冠軍（支援平手共享榮譽）。
  */
 import { GameState } from '../core/GameState.js';
 import { cloneRobots } from '../core/MovementEngine.js';
 
 export const ROOM_PHASE = Object.freeze({
+  RACING: 'RACING',
+  ROUND_END: 'ROUND_END',
+  GAME_OVER: 'GAME_OVER',
+  // 相容舊版常數
   THINKING: 'THINKING',
   COUNTDOWN: 'COUNTDOWN',
   DEMONSTRATING: 'DEMONSTRATING',
-  ROUND_END: 'ROUND_END',
 });
 
 export const BID_STATUS = Object.freeze({
@@ -30,10 +39,10 @@ export const BID_STATUS = Object.freeze({
 export class RoomState {
   /**
    * @param {object} [options]
-   * @param {number} [options.countdownDuration=60] 倒數沙漏時長（秒）
+   * @param {number} [options.countdownDuration=120] 競賽倒數時長（預設 120 秒）
    */
-  constructor({ countdownDuration = 60 } = {}) {
-    this.phase = ROOM_PHASE.THINKING;
+  constructor({ countdownDuration = 120 } = {}) {
+    this.phase = ROOM_PHASE.RACING;
     this.round = 1;
     this.grid = null;
     this.target = null;
@@ -43,29 +52,49 @@ export class RoomState {
     /** 玩家字典：id -> { id, name, isHost, score } */
     this.players = new Map();
 
-    /** 下注列表：{ playerId, playerName, moves, timestamp, status } */
+    /** 排行榜與解法清單：{ playerId, playerName, moves, timestamp, status, path, finalRobots } */
     this.bids = [];
 
     this.countdownDuration = countdownDuration;
     this.countdownEnd = null;
 
-    /** 目前獨占操作展示的玩家 ID */
+    /** 本回合獲勝名單 */
+    this.roundWinner = null;
+    this.roundWinners = [];
+    this.isDraw = false;
+
+    /** 17 題牌堆管理 */
+    this.targetDeck = [];
+    this.completedTargets = [];
+    this.totalTargetsCount = 17;
+
+    /** 舊版相容屬性 */
     this.activeDemonstratorId = null;
     this.demonstrationIndex = 0;
+  }
 
-    /** 本回合獲勝者：{ playerId, playerName, moves } | null */
-    this.roundWinner = null;
+  /** 設定 17 題完整目標牌堆 */
+  setTargetDeck(targets) {
+    if (Array.isArray(targets)) {
+      this.targetDeck = targets.map((t) => ({ ...t }));
+      this.totalTargetsCount = this.targetDeck.length || 17;
+    }
+    return this;
   }
 
   /**
    * 初始化 / 開始新回合。
-   * @param {object} params
-   * @param {Array<Array<object>>} params.grid
-   * @param {Record<string,{x,y}>} params.initialRobots
-   * @param {object} params.target
-   * @param {number} [params.round]
+   * 預設直接進入 RACING 階段（120 秒同步競速）。
    */
-  startRound({ grid, initialRobots, target, round }) {
+  startRound({
+    grid,
+    initialRobots,
+    target,
+    round,
+    duration = 120,
+    targetDeck = null,
+    phase = ROOM_PHASE.RACING,
+  }) {
     if (!grid || !initialRobots || !target) {
       throw new Error('grid, initialRobots, and target are required to start a round');
     }
@@ -73,14 +102,19 @@ export class RoomState {
     this.initialRobots = cloneRobots(initialRobots);
     this.target = { ...target };
     if (typeof round === 'number') this.round = round;
+    if (Array.isArray(targetDeck)) this.targetDeck = [...targetDeck];
 
     this.gameState.initRound(this.grid, this.initialRobots, this.target);
-    this.phase = ROOM_PHASE.THINKING;
+    this.phase = phase;
+    this.countdownDuration = duration;
+    this.countdownEnd = phase === ROOM_PHASE.THINKING ? null : Date.now() + duration * 1000;
+
     this.bids = [];
-    this.countdownEnd = null;
+    this.roundWinner = null;
+    this.roundWinners = [];
+    this.isDraw = false;
     this.activeDemonstratorId = null;
     this.demonstrationIndex = 0;
-    this.roundWinner = null;
     return this;
   }
 
@@ -101,7 +135,6 @@ export class RoomState {
 
   removePlayer(id) {
     this.players.delete(id);
-    // 若正在展示的玩家離線，自動放棄轉移
     if (this.phase === ROOM_PHASE.DEMONSTRATING && this.activeDemonstratorId === id) {
       this.forfeitDemonstration(id);
     }
@@ -115,13 +148,13 @@ export class RoomState {
     return Array.from(this.players.values());
   }
 
-  // ---------- 下注與排行榜 ----------
+  // ---------- 解法回報與即時排行榜 (Personal Best) ----------
 
   /**
    * 取得排序後的排行榜。
-   * 排序規則：
+   * 規則：
    * 1. 步數少者優先 (moves 升冪)
-   * 2. 步數相同時，先下注者優先 (timestamp 升冪)
+   * 2. 步數相同時，先達成者優先 (timestamp 升冪)
    */
   getLeaderboard() {
     return [...this.bids].sort((a, b) => {
@@ -131,20 +164,27 @@ export class RoomState {
   }
 
   /**
-   * 提交下注。
-   * 規則：
-   * - 僅限 THINKING 或 COUNTDOWN 階段。
-   * - 步數必須為大於等於 2 之整數（規則要求至少轉向一次）。
-   * - 若該玩家已下注過，新下注必須嚴格小於自己前一次下注。
-   * - 第一位下注者觸發 COUNTDOWN 階段並啟動 60 秒倒數。
+   * 回報玩家個人最佳步數 (PB)。
+   * @param {string} playerId
+   * @param {number} moves
+   * @param {object} [extra]
    */
-  submitBid(playerId, moves, timestamp = Date.now()) {
-    if (this.phase !== ROOM_PHASE.THINKING && this.phase !== ROOM_PHASE.COUNTDOWN) {
-      return { accepted: false, reason: `Cannot bid in phase ${this.phase}` };
+  reportSolution(
+    playerId,
+    moves,
+    { timestamp = Date.now(), path = null, finalRobots = null } = {}
+  ) {
+    if (
+      this.phase !== ROOM_PHASE.RACING &&
+      this.phase !== ROOM_PHASE.COUNTDOWN &&
+      this.phase !== ROOM_PHASE.THINKING
+    ) {
+      return { accepted: false, reason: `Cannot report solution in phase ${this.phase}` };
     }
+
     const m = Number(moves);
     if (!Number.isInteger(m) || m < 2) {
-      return { accepted: false, reason: 'Bid moves must be an integer >= 2' };
+      return { accepted: false, reason: 'Moves must be an integer >= 2' };
     }
 
     const player = this.players.get(playerId);
@@ -156,14 +196,16 @@ export class RoomState {
       if (m >= prev.moves) {
         return {
           accepted: false,
-          reason: `New bid (${m}) must be strictly lower than your previous bid (${prev.moves})`,
+          reason: `New solution (${m}) must be strictly fewer steps than previous PB (${prev.moves})`,
         };
       }
-      // 更新玩家下注
       this.bids[existingIndex] = {
         ...prev,
         moves: m,
         timestamp,
+        path,
+        finalRobots: finalRobots ? cloneRobots(finalRobots) : null,
+        status: BID_STATUS.ACTIVE,
       };
     } else {
       this.bids.push({
@@ -171,15 +213,15 @@ export class RoomState {
         playerName,
         moves: m,
         timestamp,
-        status: BID_STATUS.PENDING,
+        path,
+        finalRobots: finalRobots ? cloneRobots(finalRobots) : null,
+        status: BID_STATUS.ACTIVE,
       });
     }
 
-    // 重新排序
     this.bids = this.getLeaderboard();
 
     let phaseChanged = false;
-    // 第一個有效下注觸發 COUNTDOWN
     if (this.phase === ROOM_PHASE.THINKING) {
       this.phase = ROOM_PHASE.COUNTDOWN;
       this.countdownEnd = timestamp + this.countdownDuration * 1000;
@@ -188,66 +230,183 @@ export class RoomState {
 
     return {
       accepted: true,
-      phaseChanged,
+      isPB: true,
       moves: m,
+      phaseChanged,
       phase: this.phase,
       countdownEnd: this.countdownEnd,
       leaderboard: this.getLeaderboard(),
     };
   }
 
-  // ---------- 倒數結束與展示期 ----------
+  /** 相容舊版下注介面 */
+  submitBid(playerId, moves, timestamp = Date.now()) {
+    return this.reportSolution(playerId, moves, { timestamp });
+  }
+
+  // ---------- 回合結算與 17 題終局判定 ----------
 
   /**
-   * 倒數結束，切換至 DEMONSTRATING 展示期。
-   * 鎖定下注，取出排行榜第一名玩家解鎖操作權。
+   * 結算本回合：
+   * 1. 若有解法：步數最少者獲勝 (+1 分)；平手者均獲得 1 分。
+   *    目標圓片自剩餘牌堆移除。若 17 題全達成，轉入 GAME_OVER。
+   * 2. 若無解法 (流標)：目標圓片洗回牌堆，轉入 ROUND_END。
    */
-  endCountdown() {
-    if (this.phase !== ROOM_PHASE.COUNTDOWN && this.phase !== ROOM_PHASE.THINKING) {
-      return { success: false, reason: `Cannot end countdown in phase ${this.phase}` };
+  endRound() {
+    if (this.phase === ROOM_PHASE.ROUND_END || this.phase === ROOM_PHASE.GAME_OVER) {
+      return { success: false, reason: `Round already ended in phase ${this.phase}` };
     }
 
     this.bids = this.getLeaderboard();
-    if (this.bids.length === 0) {
-      // 無人下注直接結算（平手/無人得標）
-      this.phase = ROOM_PHASE.ROUND_END;
-      this.roundWinner = null;
-      return { success: true, phase: this.phase, demonstrator: null, reason: 'NO_BIDS' };
+
+    if (this.bids.length > 0) {
+      const minMoves = this.bids[0].moves;
+      const winners = this.bids.filter((b) => b.moves === minMoves);
+      this.roundWinners = winners;
+      this.roundWinner = winners[0];
+      this.isDraw = false;
+
+      // 各獲勝者 +1 分
+      for (const w of winners) {
+        w.status = BID_STATUS.SUCCESS;
+        const player = this.players.get(w.playerId);
+        if (player) {
+          player.score = (player.score || 0) + 1;
+        }
+      }
+
+      // 目標圓片已贏得，記錄並從牌堆中移除
+      if (this.target) {
+        this.completedTargets.push({ ...this.target });
+      }
+      if (this.targetDeck && this.targetDeck.length > 0 && this.target) {
+        const idx = this.targetDeck.findIndex(
+          (t) => t.x === this.target.x && t.y === this.target.y
+        );
+        if (idx >= 0) this.targetDeck.splice(idx, 1);
+      }
+
+      // 檢查是否 17 題全部達成
+      const isGameOver =
+        (this.targetDeck && this.targetDeck.length === 0) ||
+        this.completedTargets.length >= this.totalTargetsCount;
+
+      this.phase = isGameOver ? ROOM_PHASE.GAME_OVER : ROOM_PHASE.ROUND_END;
+
+      return {
+        success: true,
+        phase: this.phase,
+        winners,
+        minMoves,
+        isDraw: false,
+        gameOver: isGameOver,
+        completedCount: this.completedTargets.length,
+        remainingCount: this.targetDeck ? this.targetDeck.length : 0,
+      };
     }
 
-    this.phase = ROOM_PHASE.DEMONSTRATING;
-    this.demonstrationIndex = 0;
-    const topBid = this.bids[0];
-    topBid.status = BID_STATUS.ACTIVE;
-    this.activeDemonstratorId = topBid.playerId;
+    // 流標處理：目標圓片洗回剩餘牌堆
+    this.isDraw = true;
+    this.roundWinners = [];
+    this.roundWinner = null;
 
-    // 確保棋盤機器人在起始位置
-    this.gameState.resetToInitial();
+    if (this.target && this.targetDeck) {
+      const alreadyIn = this.targetDeck.some(
+        (t) => t.x === this.target.x && t.y === this.target.y
+      );
+      if (!alreadyIn) {
+        this.targetDeck.push({ ...this.target });
+      }
+    }
 
+    this.phase = ROOM_PHASE.ROUND_END;
     return {
       success: true,
       phase: this.phase,
-      demonstrator: { ...topBid },
+      winners: [],
+      minMoves: null,
+      isDraw: true,
+      gameOver: false,
+      completedCount: this.completedTargets.length,
+      remainingCount: this.targetDeck ? this.targetDeck.length : 0,
     };
   }
 
-  /** 目前正在展示的下注項目 */
-  getCurrentDemonstratorBid() {
-    if (this.phase !== ROOM_PHASE.DEMONSTRATING || !this.activeDemonstratorId) return null;
-    return this.bids.find((b) => b.playerId === this.activeDemonstratorId && b.status === BID_STATUS.ACTIVE) || null;
+  /** 相容舊版 endCountdown */
+  endCountdown() {
+    if (this.phase === ROOM_PHASE.RACING) {
+      return this.endRound();
+    }
+    if (this.phase === ROOM_PHASE.COUNTDOWN) {
+      // 若為舊版沙漏倒數，且無展示者設定，亦可支援 endRound
+      if (this.bids.length === 0) {
+        return this.endRound();
+      }
+      // 舊版 DEMONSTRATING
+      this.phase = ROOM_PHASE.DEMONSTRATING;
+      this.demonstrationIndex = 0;
+      const topBid = this.bids[0];
+      topBid.status = BID_STATUS.ACTIVE;
+      this.activeDemonstratorId = topBid.playerId;
+      this.gameState.resetToInitial();
+      return {
+        success: true,
+        phase: this.phase,
+        demonstrator: { ...topBid },
+      };
+    }
+    return this.endRound();
   }
 
-  // ---------- 獨占操作鎖與移動驗證 ----------
-
   /**
-   * 展示者執行移動（Mutex Lock 嚴格驗證）。
-   * 只有 activeDemonstratorId 能操作。
-   *
-   * @param {string} playerId
-   * @param {string} robotColor
-   * @param {'up'|'down'|'left'|'right'} direction
-   * @returns {{success:boolean, moved?:boolean, slide?:object, outcome?:string, reason?:string}}
+   * 終局頒獎榜單：
+   * 依總分由高至低排名，若最高分有多人則 isTie = true（共同獲勝）。
    */
+  getPodium() {
+    const list = Array.from(this.players.values());
+    const rankings = [...list].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const topScore = rankings.length > 0 ? rankings[0].score || 0 : 0;
+    const champions = topScore > 0 ? rankings.filter((p) => (p.score || 0) === topScore) : [];
+    const isTie = champions.length > 1;
+
+    return {
+      rankings,
+      champions,
+      topScore,
+      isTie,
+      totalCompleted: this.completedTargets.length,
+    };
+  }
+
+  /** 重新開始新的一局（重設所有玩家得分與 17 題牌堆） */
+  restartGame(allTargets = null) {
+    for (const p of this.players.values()) {
+      p.score = 0;
+    }
+    this.completedTargets = [];
+    if (Array.isArray(allTargets)) {
+      this.targetDeck = allTargets.map((t) => ({ ...t }));
+      this.totalTargetsCount = this.targetDeck.length || 17;
+    }
+    this.round = 1;
+    this.roundWinner = null;
+    this.roundWinners = [];
+    this.isDraw = false;
+    this.phase = ROOM_PHASE.RACING;
+    return this;
+  }
+
+  // ---------- 舊版獨占操作鎖相容介面 ----------
+
+  getCurrentDemonstratorBid() {
+    if (this.phase !== ROOM_PHASE.DEMONSTRATING || !this.activeDemonstratorId) return null;
+    return (
+      this.bids.find(
+        (b) => b.playerId === this.activeDemonstratorId && b.status === BID_STATUS.ACTIVE
+      ) || null
+    );
+  }
+
   applyDemonstratorMove(playerId, robotColor, direction) {
     if (this.phase !== ROOM_PHASE.DEMONSTRATING) {
       return { success: false, reason: `Board is locked: current phase is ${this.phase}` };
@@ -272,7 +431,6 @@ export class RoomState {
     const moveCount = this.gameState.moveCount;
     const goal = this.gameState.checkGoalReached();
 
-    // 1. 達陣成功判定：達陣且步數剛好等於下注步數
     if (goal.success && moveCount === curBid.moves) {
       curBid.status = BID_STATUS.SUCCESS;
       this.roundWinner = {
@@ -280,11 +438,12 @@ export class RoomState {
         playerName: curBid.playerName,
         moves: curBid.moves,
       };
+      this.roundWinners = [this.roundWinner];
 
-      // 累加獲勝者分數
       const winnerPlayer = this.players.get(curBid.playerId);
       if (winnerPlayer) winnerPlayer.score = (winnerPlayer.score || 0) + 1;
 
+      if (this.target) this.completedTargets.push({ ...this.target });
       this.phase = ROOM_PHASE.ROUND_END;
       return {
         success: true,
@@ -297,7 +456,6 @@ export class RoomState {
       };
     }
 
-    // 2. 超過下注步數判定：步數超過宣布量直接失敗
     if (moveCount > curBid.moves) {
       const handover = this._failCurrentDemonstrator('Exceeded declared moves');
       return {
@@ -320,10 +478,6 @@ export class RoomState {
     };
   }
 
-  /**
-   * 展示者放棄展示（點擊「放棄」或違規逾時）。
-   * 機器人彈回起點，權限移交給次順位玩家。
-   */
   forfeitDemonstration(playerId) {
     if (this.phase !== ROOM_PHASE.DEMONSTRATING) {
       return { success: false, reason: `Cannot forfeit in phase ${this.phase}` };
@@ -335,16 +489,13 @@ export class RoomState {
     return { success: true, handover };
   }
 
-  /** 內部處理展示失敗並轉移權限 */
   _failCurrentDemonstrator(reason) {
     const curBid = this.getCurrentDemonstratorBid();
     if (curBid) curBid.status = BID_STATUS.FAILED;
 
-    // 機器人全體彈回起點
     this.gameState.resetToInitial();
-
-    // 尋找次順位玩家
     this.demonstrationIndex++;
+
     if (this.demonstrationIndex < this.bids.length) {
       const nextBid = this.bids[this.demonstrationIndex];
       nextBid.status = BID_STATUS.ACTIVE;
@@ -357,10 +508,10 @@ export class RoomState {
       };
     }
 
-    // 全員失敗
     this.phase = ROOM_PHASE.ROUND_END;
     this.activeDemonstratorId = null;
     this.roundWinner = null;
+    this.roundWinners = [];
     return {
       phase: ROOM_PHASE.ROUND_END,
       hasMore: false,
@@ -369,7 +520,7 @@ export class RoomState {
     };
   }
 
-  // ---------- 狀態快照 (廣播同步) ----------
+  // ---------- 狀態快照序列化與反序列化 ----------
 
   serialize() {
     return {
@@ -386,6 +537,11 @@ export class RoomState {
       activeDemonstratorId: this.activeDemonstratorId,
       demonstrationIndex: this.demonstrationIndex,
       roundWinner: this.roundWinner ? { ...this.roundWinner } : null,
+      roundWinners: this.roundWinners.map((w) => ({ ...w })),
+      isDraw: this.isDraw,
+      completedTargetsCount: this.completedTargets.length,
+      remainingTargetsCount: this.targetDeck ? this.targetDeck.length : 0,
+      totalTargetsCount: this.totalTargetsCount,
       players: Array.from(this.players.values()),
     };
   }
@@ -397,11 +553,18 @@ export class RoomState {
     this.target = snapshot.target ? { ...snapshot.target } : null;
     this.initialRobots = snapshot.initialRobots ? cloneRobots(snapshot.initialRobots) : null;
     this.countdownEnd = snapshot.countdownEnd;
-    this.countdownDuration = snapshot.countdownDuration || 60;
+    this.countdownDuration = snapshot.countdownDuration || 120;
     this.activeDemonstratorId = snapshot.activeDemonstratorId;
     this.demonstrationIndex = snapshot.demonstrationIndex || 0;
     this.roundWinner = snapshot.roundWinner ? { ...snapshot.roundWinner } : null;
+    this.roundWinners = Array.isArray(snapshot.roundWinners)
+      ? snapshot.roundWinners.map((w) => ({ ...w }))
+      : this.roundWinner
+      ? [this.roundWinner]
+      : [];
+    this.isDraw = Boolean(snapshot.isDraw);
     this.bids = (snapshot.bids || []).map((b) => ({ ...b }));
+    this.totalTargetsCount = snapshot.totalTargetsCount || 17;
 
     if (snapshot.players) {
       this.players.clear();

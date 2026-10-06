@@ -1,12 +1,12 @@
 /**
  * RoomManager.js
- * 多人連線網路傳輸層封裝。
+ * 多人連線網路傳輸層封裝（支援 2 分鐘同步競賽、PB 解法廣播、雙模切換）。
  *
  * 雙模式切換機制：
  * 1. 若設定有 SUPABASE_URL 與 SUPABASE_ANON_KEY（可從 localStorage 或 window.SUPABASE_CONFIG 讀取），
  *    則使用 Supabase Realtime Channel 的 broadcast 廣播事件。
  * 2. 若無設定 Key（預設狀態），自動回退使用瀏覽器 / Node.js 原生的 BroadcastChannel API。
- *    允許同台電腦開啟多個瀏覽器分頁無縫測試連線、下注競標與同步展示！
+ *    允許同台電腦開啟多個瀏覽器分頁無縫測試連線、同步競速、回報個人最佳解法！
  */
 
 export const NETWORK_MODE = Object.freeze({
@@ -20,6 +20,11 @@ export const MSG_TYPE = Object.freeze({
   SYNC_REQUEST: 'SYNC_REQUEST',
   SYNC_RESPONSE: 'SYNC_RESPONSE',
   NEW_ROUND: 'NEW_ROUND',
+  REPORT_PB: 'REPORT_PB',           // 回報個人最佳解 (PB)
+  ROUND_END_SYNC: 'ROUND_END_SYNC', // 回合結算同步
+  GAME_OVER_SYNC: 'GAME_OVER_SYNC', // 17 題完賽終局同步
+  GAME_RESTART: 'GAME_RESTART',     // 重新開局
+  // 保持向後相容
   BID: 'BID',
   COUNTDOWN_START: 'COUNTDOWN_START',
   COUNTDOWN_END: 'COUNTDOWN_END',
@@ -276,7 +281,6 @@ export class RoomManager {
 
   _handleIncomingMessage(msg) {
     if (!msg || msg.roomId !== this.roomId) return;
-    // 忽略自己發送的廣播（BroadcastChannel 本身不含自己，但以防萬一）
     if (msg.senderId === this.userId) return;
 
     this._emit(msg.type, {
@@ -288,9 +292,20 @@ export class RoomManager {
     });
   }
 
-  // ---------- 語意化動作介面 (規格需求) ----------
+  // ---------- 語意化動作介面 ----------
 
-  /** 發送下注宣告步數 */
+  /** 回報個人最佳解 (PB) */
+  sendSolution(moves, extra = {}) {
+    this.send(MSG_TYPE.REPORT_PB, {
+      playerId: this.userId,
+      playerName: this.userName,
+      moves: Number(moves),
+      timestamp: Date.now(),
+      ...extra,
+    });
+  }
+
+  /** 相容舊版下注發送 */
   sendBid(moves) {
     this.send(MSG_TYPE.BID, {
       playerId: this.userId,
@@ -300,7 +315,23 @@ export class RoomManager {
     });
   }
 
-  /** 展示者發送滑動移動 */
+  /** 房主發送回合結束結算同步 */
+  sendRoundEndSync(data) {
+    this.send(MSG_TYPE.ROUND_END_SYNC, {
+      ...data,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** 房主發送重新開局同步 */
+  sendGameRestart(data) {
+    this.send(MSG_TYPE.GAME_RESTART, {
+      ...data,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** 展示者發送滑動移動 (相容舊版) */
   sendMove(robotColor, direction) {
     this.send(MSG_TYPE.DEMO_MOVE, {
       playerId: this.userId,
@@ -310,7 +341,7 @@ export class RoomManager {
     });
   }
 
-  /** 展示者發送放棄展示 */
+  /** 展示者發送放棄展示 (相容舊版) */
   forfeit() {
     this.send(MSG_TYPE.DEMO_FORFEIT, {
       playerId: this.userId,
@@ -337,7 +368,7 @@ export class RoomManager {
   }
 
   /** 發送倒數計時開始 */
-  sendCountdownStart(countdownEnd, durationSec = 60) {
+  sendCountdownStart(countdownEnd, durationSec = 120) {
     this.send(MSG_TYPE.COUNTDOWN_START, {
       countdownEnd,
       durationSec,
@@ -345,7 +376,7 @@ export class RoomManager {
     });
   }
 
-  /** 發送倒數結束進入展示期 */
+  /** 發送倒數結束 */
   sendCountdownEnd() {
     this.send(MSG_TYPE.COUNTDOWN_END, {
       timestamp: Date.now(),

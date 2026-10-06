@@ -22,8 +22,8 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-section('1. RoomManager 建立與雙分頁連線通訊');
 async function runTest() {
+  section('1. RoomManager 建立與雙分頁連線通訊');
   const roomId = 'room_test_' + Date.now();
 
   const clientA = new RoomManager();
@@ -71,7 +71,10 @@ async function runTest() {
   clientB.sendMove('red', 'up');
   await sleep(60);
   assert(aReceivedMove !== null, 'Client A 收到 Client B 移動廣播');
-  assert(aReceivedMove?.payload?.robotColor === 'red' && aReceivedMove?.payload?.direction === 'up', '移動內容為 red 向上');
+  assert(
+    aReceivedMove?.payload?.robotColor === 'red' && aReceivedMove?.payload?.direction === 'up',
+    '移動內容為 red 向上'
+  );
 
   // Client B 發送放棄
   clientB.forfeit();
@@ -82,7 +85,50 @@ async function runTest() {
   await clientA.leaveRoom();
   await clientB.leaveRoom();
 
-  section('2. 連線模式動態切換');
+  section('2. 2 分鐘同步競速消息廣播 (REPORT_PB, ROUND_END_SYNC, GAME_RESTART)');
+  const raceRoomId = 'room_race_' + Date.now();
+  const host = new RoomManager();
+  const player = new RoomManager();
+
+  let hostReceivedPB = null;
+  let playerReceivedRoundEnd = null;
+  let playerReceivedRestart = null;
+
+  host.on(MSG_TYPE.REPORT_PB, (data) => {
+    hostReceivedPB = data;
+  });
+  player.on(MSG_TYPE.ROUND_END_SYNC, (data) => {
+    playerReceivedRoundEnd = data;
+  });
+  player.on(MSG_TYPE.GAME_RESTART, (data) => {
+    playerReceivedRestart = data;
+  });
+
+  await host.createRoom(raceRoomId, 'HostAlice');
+  await player.joinRoom(raceRoomId, 'PlayerBob');
+  await sleep(60);
+
+  // 玩家回報 PB
+  player.sendSolution(5);
+  await sleep(60);
+  assert(hostReceivedPB !== null, '房主收到玩家回報的個人最佳解 (PB)');
+  assert(hostReceivedPB?.payload?.moves === 5, 'PB 步數為 5');
+
+  // 房主廣播回合結算
+  host.sendRoundEndSync({ round: 1, endResult: { minMoves: 5, winners: ['PlayerBob'] } });
+  await sleep(60);
+  assert(playerReceivedRoundEnd !== null, '玩家收到房主發送的回合結算同步');
+  assert(playerReceivedRoundEnd?.payload?.endResult?.minMoves === 5, '結算最低步數為 5');
+
+  // 房主廣播重新開局
+  host.sendGameRestart({ resetAll: true });
+  await sleep(60);
+  assert(playerReceivedRestart !== null, '玩家收到房主發送的重新開局通知');
+
+  await host.leaveRoom();
+  await player.leaveRoom();
+
+  section('3. 連線模式動態切換');
   const mgr = new RoomManager();
   assert(mgr.mode === NETWORK_MODE.BROADCAST_CHANNEL, '預設無設定時為 BroadcastChannel');
   assert(mgr.getEffectiveMode() === NETWORK_MODE.BROADCAST_CHANNEL, 'getEffectiveMode 回傳 BroadcastChannel');
@@ -92,7 +138,10 @@ async function runTest() {
     __SUPABASE_URL__: 'https://example.supabase.co',
     __SUPABASE_ANON_KEY__: 'mock_anon_key_123',
   };
-  assert(mgr.getEffectiveMode() === NETWORK_MODE.SUPABASE_REALTIME, '設定 URL/Key 後 getEffectiveMode 轉為 Supabase Realtime');
+  assert(
+    mgr.getEffectiveMode() === NETWORK_MODE.SUPABASE_REALTIME,
+    '設定 URL/Key 後 getEffectiveMode 轉為 Supabase Realtime'
+  );
   await mgr.reconfigure();
   assert(mgr.mode === NETWORK_MODE.SUPABASE_REALTIME, 'reconfigure 後 mode 更新為 Supabase Realtime');
 
@@ -109,6 +158,5 @@ async function runTest() {
   if (failed > 0) process.exit(1);
   process.exit(0);
 }
-
 
 runTest();

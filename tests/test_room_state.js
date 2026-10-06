@@ -1,10 +1,9 @@
 /**
- * 測試：RoomState 多人連線房間狀態機
+ * 測試：RoomState 多人連線房間狀態機（2 分鐘同步競速與 17 題終局結算）
  * 執行：node tests/test_room_state.js
  */
 import { RoomState, ROOM_PHASE, BID_STATUS } from '../src/network/RoomState.js';
 import { assembleBigBoard } from '../src/core/BoardAssembler.js';
-import { DIRECTION_DELTA, OPPOSITE_EDGE } from '../src/core/constants.js';
 
 let passed = 0;
 let failed = 0;
@@ -19,18 +18,11 @@ function assert(cond, msg) {
   }
 }
 const section = (t) => console.log(`\n=== ${t} ===`);
-const samePos = (a, b) => a.x === b.x && a.y === b.y;
 
 // 空白測試地圖
 function emptyGrid() {
   const blank = (id) => ({ board_id: id, group: id, walls: [], targets: [] });
   return assembleBigBoard(blank('E1'), blank('E2'), blank('E3'), blank('E4'));
-}
-function addWall(grid, x, y, edge) {
-  grid[y][x][edge] = true;
-  const { dx, dy } = DIRECTION_DELTA[edge];
-  const row = grid[y + dy];
-  if (row && row[x + dx]) row[x + dx][OPPOSITE_EDGE[edge]] = true;
 }
 
 const baseRobots = () => ({
@@ -41,192 +33,216 @@ const baseRobots = () => ({
 });
 
 // =====================================================
-section('1. 下注排序規則');
+section('1. 120 秒同步競速與個人最佳解 (PB) 回報');
 {
-  const room = new RoomState();
+  const room = new RoomState({ countdownDuration: 120 });
   const grid = emptyGrid();
   room.startRound({
     grid,
     initialRobots: baseRobots(),
     target: { color: 'red', shape: 'star', x: 0, y: 0 },
+    duration: 120,
   });
 
   room.addPlayer({ id: 'p1', name: 'Alice' });
   room.addPlayer({ id: 'p2', name: 'Bob' });
   room.addPlayer({ id: 'p3', name: 'Charlie' });
 
-  // 1.1 步數少者優先
-  room.submitBid('p1', 10, 1000);
-  room.submitBid('p2', 6, 2000);
+  assert(room.phase === ROOM_PHASE.RACING, '開局階段直接進入 RACING 競速期');
+  assert(room.countdownDuration === 120, '競賽倒數時長為 120 秒');
+  assert(typeof room.countdownEnd === 'number', '具有倒數結束時間戳');
+
+  // 1.1 回報解法：步數少者排在前面
+  const res1 = room.reportSolution('p1', 10, { timestamp: 1000 });
+  assert(res1.accepted && res1.isPB, 'Alice 回報 10 步成功');
+  const res2 = room.reportSolution('p2', 6, { timestamp: 2000 });
+  assert(res2.accepted && res2.isPB, 'Bob 回報 6 步成功');
+
   let lb = room.getLeaderboard();
-  assert(lb[0].playerId === 'p2' && lb[0].moves === 6, '步數少者優先：Bob (6) 排在 Alice (10) 前');
+  assert(lb[0].playerId === 'p2' && lb[0].moves === 6, '步數少者優先：Bob (6步) 排第 1');
+  assert(lb[1].playerId === 'p1' && lb[1].moves === 10, 'Alice (10步) 排第 2');
 
-  // 1.2 步數相同時，先下注者優先
-  room.submitBid('p3', 6, 3000);
+  // 1.2 步數相同時，先達成者排在前面
+  room.reportSolution('p3', 6, { timestamp: 3000 });
   lb = room.getLeaderboard();
-  assert(lb[0].playerId === 'p2' && lb[1].playerId === 'p3', '步數相同 (6) 時，先下注者 Bob (ts=2000) 優於 Charlie (ts=3000)');
+  assert(lb[0].playerId === 'p2' && lb[1].playerId === 'p3', '步數相同 (6步) 時，先達成者 Bob (ts=2000) 優於 Charlie (ts=3000)');
 
-  // 1.3 同一玩家重複下注：新下注必須嚴格小於前一次
-  const rejected1 = room.submitBid('p1', 10, 4000);
-  assert(!rejected1.accepted, 'Alice 重複下注相同步數 (10) 應被拒絕');
-  const rejected2 = room.submitBid('p1', 12, 4000);
-  assert(!rejected2.accepted, 'Alice 下注更多步數 (12 > 10) 應被拒絕');
+  // 1.3 刷新個人最佳步數 (PB)
+  const rejectSame = room.reportSolution('p1', 10, { timestamp: 4000 });
+  assert(!rejectSame.accepted, 'Alice 重複回報相同步數 (10) 應被拒絕');
+  const rejectWorse = room.reportSolution('p1', 12, { timestamp: 4000 });
+  assert(!rejectWorse.accepted, 'Alice 回報更差步數 (12 > 10) 應被拒絕');
 
-  const accepted = room.submitBid('p1', 5, 4500);
-  assert(accepted.accepted, 'Alice 下注更少步數 (5 < 10) 接受');
+  const updateBetter = room.reportSolution('p1', 5, { timestamp: 4500 });
+  assert(updateBetter.accepted, 'Alice 回報更少步數 (5 < 10) 接受並更新 PB');
   lb = room.getLeaderboard();
-  assert(lb[0].playerId === 'p1' && lb[0].moves === 5, 'Alice 喊 5 步躍升為第 1 名');
+  assert(lb[0].playerId === 'p1' && lb[0].moves === 5, 'Alice 刷新為 5 步躍升為第 1 名');
 
-  // 1.4 非法步數拒絕 (moves < 2)
-  const rejectedZero = room.submitBid('p2', 1, 5000);
-  assert(!rejectedZero.accepted, '下注 < 2 步應被拒絕（不合轉向規則）');
+  // 1.4 非法步數 (< 2 步，不合轉向規則) 應被拒絕
+  const rejectTooFew = room.reportSolution('p2', 1, { timestamp: 5000 });
+  assert(!rejectTooFew.accepted, '回報 < 2 步應被拒絕');
 }
 
 // =====================================================
-section('2. 沙漏倒數觸發邏輯');
+section('2. 回合結算與自動比對最低步數 (Auto-Scoring)');
 {
-  const room = new RoomState({ countdownDuration: 60 });
+  const room = new RoomState();
+  const deck = [
+    { color: 'red', shape: 'star', x: 0, y: 0 },
+    { color: 'blue', shape: 'moon', x: 1, y: 1 },
+  ];
+  room.setTargetDeck(deck);
+  room.startRound({
+    grid: emptyGrid(),
+    initialRobots: baseRobots(),
+    target: deck[0],
+  });
+
+  room.addPlayer({ id: 'p1', name: 'Alice' });
+  room.addPlayer({ id: 'p2', name: 'Bob' });
+
+  room.reportSolution('p1', 7, { timestamp: 1000 });
+  room.reportSolution('p2', 5, { timestamp: 2000 });
+
+  // 2 分鐘倒數結束，執行結算
+  const endRes = room.endRound();
+  assert(endRes.success, '回合結算成功');
+  assert(room.phase === ROOM_PHASE.ROUND_END, '切換至 ROUND_END 階段');
+  assert(endRes.minMoves === 5, '最低步數為 5 步');
+  assert(room.roundWinner.playerId === 'p2', 'Bob (5步) 為本回合獲勝者');
+  assert(room.players.get('p2').score === 1, 'Bob 得分 +1 (累計 1 分)');
+  assert(room.players.get('p1').score === 0, 'Alice 未得最低步數得分為 0');
+
+  // 目標圓片自牌堆中移除
+  assert(room.completedTargets.length === 1, '已完成目標數為 1');
+  assert(room.targetDeck.length === 1, '牌堆剩餘 1 張目標');
+}
+
+// =====================================================
+section('3. 平手處理：多人步數相同且為最低，共同獲勝各得 1 分');
+{
+  const room = new RoomState();
+  room.setTargetDeck([{ color: 'red', shape: 'star', x: 0, y: 0 }]);
   room.startRound({
     grid: emptyGrid(),
     initialRobots: baseRobots(),
     target: { color: 'red', shape: 'star', x: 0, y: 0 },
   });
-  room.addPlayer({ id: 'p1', name: 'Alice' });
-  room.addPlayer({ id: 'p2', name: 'Bob' });
 
-  assert(room.phase === ROOM_PHASE.THINKING, '開局為 THINKING 階段');
-  assert(room.countdownEnd === null, '思考期無倒數結束時間');
-
-  // 第一位下注者觸發倒數
-  const res1 = room.submitBid('p1', 8, 10000);
-  assert(room.phase === ROOM_PHASE.COUNTDOWN, '第一位下注者觸發切換至 COUNTDOWN 階段');
-  assert(res1.phaseChanged === true, '回傳 phaseChanged = true');
-  assert(room.countdownEnd === 10000 + 60 * 1000, '倒數結束時間為 10000 + 60000');
-
-  // 第二位下注者不應改變倒數結束時間
-  const prevEnd = room.countdownEnd;
-  const res2 = room.submitBid('p2', 7, 15000);
-  assert(room.phase === ROOM_PHASE.COUNTDOWN, '第二位下注維持 COUNTDOWN 階段');
-  assert(res2.phaseChanged === false, '回傳 phaseChanged = false');
-  assert(room.countdownEnd === prevEnd, '倒數結束時間不被重置');
-}
-
-// =====================================================
-section('3. 獨占操作鎖 (Mutex Lock) 與展示移動');
-{
-  const room = new RoomState();
-  const grid = emptyGrid();
-  room.startRound({
-    grid,
-    initialRobots: baseRobots(),
-    target: { color: 'red', shape: 'star', x: 0, y: 0 },
-  });
-  room.addPlayer({ id: 'p1', name: 'Alice' });
-  room.addPlayer({ id: 'p2', name: 'Bob' });
-
-  room.submitBid('p1', 8, 1000);
-  room.submitBid('p2', 6, 2000);
-
-  // 思考中禁止任何人移動
-  const earlyMove = room.applyDemonstratorMove('p2', 'red', 'up');
-  assert(!earlyMove.success, '倒數尚未結束前禁止移動棋盤');
-
-  // 倒數結束切換至 DEMONSTRATING
-  const endRes = room.endCountdown();
-  assert(endRes.success && room.phase === ROOM_PHASE.DEMONSTRATING, '切換至 DEMONSTRATING 階段');
-  assert(room.activeDemonstratorId === 'p2', '第 1 名 Bob (6步) 取得展示權限');
-
-  // 非展示者 (Alice) 嘗試移動 → Mutex Lock 阻擋
-  const aliceMove = room.applyDemonstratorMove('p1', 'red', 'up');
-  assert(!aliceMove.success, 'Alice 移動被 Mutex Lock 拒絕');
-
-  // 展示者 (Bob) 移動 → 允許
-  const bobMove = room.applyDemonstratorMove('p2', 'red', 'up');
-  assert(bobMove.success && bobMove.moved, 'Bob 移動成功');
-}
-
-// =====================================================
-section('4. 展示失敗與操作權依序轉移');
-{
-  const room = new RoomState();
-  const grid = emptyGrid();
-  room.startRound({
-    grid,
-    initialRobots: baseRobots(),
-    target: { color: 'red', shape: 'star', x: 3, y: 3 },
-  });
   room.addPlayer({ id: 'p1', name: 'Alice' });
   room.addPlayer({ id: 'p2', name: 'Bob' });
   room.addPlayer({ id: 'p3', name: 'Charlie' });
 
-  room.submitBid('p1', 6, 1000); // 排名 3
-  room.submitBid('p2', 2, 2000); // 排名 1 (2步)
-  room.submitBid('p3', 4, 3000); // 排名 2 (4步)
+  // Alice 與 Charlie 皆為 4 步最佳解，Bob 為 6 步
+  room.reportSolution('p1', 4, { timestamp: 1000 });
+  room.reportSolution('p2', 6, { timestamp: 2000 });
+  room.reportSolution('p3', 4, { timestamp: 3000 });
 
-  room.endCountdown();
-  assert(room.activeDemonstratorId === 'p2', '第一順位展示者為 Bob (2步)');
-
-  // Bob 走了 2 步但沒達陣，第 3 步超過宣布步數 → 自動判定失敗轉移
-  room.applyDemonstratorMove('p2', 'red', 'up');   // 步數 1
-  room.applyDemonstratorMove('p2', 'red', 'right'); // 步數 2
-  const failMove = room.applyDemonstratorMove('p2', 'red', 'down'); // 步數 3 > 2 步！
-  assert(failMove.outcome === 'FAILED_EXCEEDED', '超過 2 步自動判定失敗');
-  assert(room.activeDemonstratorId === 'p3', '操作權自動轉移至次順位 Charlie (4步)');
-  assert(samePos(room.gameState.robots.red, baseRobots().red), '機器人彈回初始位置');
-  assert(room.gameState.moveCount === 0, '步數計數器歸零');
-
-  // Charlie 發現無法達成，主動點擊「放棄」
-  const forfeitRes = room.forfeitDemonstration('p3');
-  assert(forfeitRes.success, 'Charlie 放棄成功');
-  assert(room.activeDemonstratorId === 'p1', '操作權轉移至第三順位 Alice (6步)');
-  assert(samePos(room.gameState.robots.red, baseRobots().red), '機器人再次彈回初始位置');
-
-  // Alice 也放棄 → 全員失敗
-  const finalForfeit = room.forfeitDemonstration('p1');
-  assert(finalForfeit.success, 'Alice 放棄成功');
-  assert(room.phase === ROOM_PHASE.ROUND_END, '全員失敗進入 ROUND_END');
-  assert(room.activeDemonstratorId === null, '展示者清空');
-  assert(room.roundWinner === null, '無人獲勝');
+  const endRes = room.endRound();
+  assert(endRes.winners.length === 2, '共 2 位玩家平手並列第一');
+  assert(room.players.get('p1').score === 1, 'Alice 獲得 1 分');
+  assert(room.players.get('p3').score === 1, 'Charlie 獲得 1 分');
+  assert(room.players.get('p2').score === 0, 'Bob 未得最低步數，分數為 0');
 }
 
 // =====================================================
-section('5. 成功達陣與得分結算');
+section('4. 流標處理：120 秒內無人達成，目標洗回牌堆');
 {
-  const grid = emptyGrid();
-  // 建立 (3,3) 牆角目標
-  addWall(grid, 3, 3, 'top');
-  addWall(grid, 3, 3, 'left');
-
   const room = new RoomState();
-  const init = {
-    red: { x: 12, y: 10 },
-    blue: { x: 2, y: 10 },
-    yellow: { x: 15, y: 15 },
-    green: { x: 0, y: 15 },
-  };
+  const deck = [{ color: 'red', shape: 'star', x: 0, y: 0 }];
+  room.setTargetDeck(deck);
+  // 抽出第 1 張
+  const currentTarget = deck.pop();
   room.startRound({
-    grid,
-    initialRobots: init,
-    target: { color: 'red', shape: 'star', x: 3, y: 3 },
+    grid: emptyGrid(),
+    initialRobots: baseRobots(),
+    target: currentTarget,
   });
+
   room.addPlayer({ id: 'p1', name: 'Alice' });
+  // 無人回報解法，時間到結算
+  const endRes = room.endRound();
 
-  // Alice 宣告 2 步
-  room.submitBid('p1', 2, 1000);
-  room.endCountdown();
-
-  // 執行 2 步達陣
-  room.applyDemonstratorMove('p1', 'red', 'left'); // (12,10) -> (3,10)
-  const winMove = room.applyDemonstratorMove('p1', 'red', 'up'); // (3,10) -> (3,3)
-
-  assert(winMove.outcome === 'SUCCESS', '剛好 2 步達陣判定 SUCCESS');
-  assert(room.phase === ROOM_PHASE.ROUND_END, '回合狀態切換至 ROUND_END');
-  assert(room.roundWinner && room.roundWinner.playerId === 'p1', 'Alice 為本回合獲勝者');
-  assert(room.players.get('p1').score === 1, 'Alice 累計得分 +1');
+  assert(endRes.isDraw === true, '無人達成判定為流標 isDraw = true');
+  assert(room.roundWinner === null, '無人獲勝');
+  assert(room.completedTargets.length === 0, '已完成目標數為 0');
+  assert(room.targetDeck.length === 1, '流標目標已成功洗回牌堆');
 }
 
 // =====================================================
-section('6. 狀態快照序列化與反序列化 (Serialize / Deserialize)');
+section('5. 17 題全部達成觸發 GAME_OVER 與終局頒獎台 (Podium)');
+{
+  const room = new RoomState();
+  room.totalTargetsCount = 2; // 測試用設定總題數為 2
+  room.setTargetDeck([
+    { color: 'red', shape: 'star', x: 0, y: 0 },
+    { color: 'blue', shape: 'moon', x: 1, y: 1 },
+  ]);
+
+  room.addPlayer({ id: 'p1', name: 'Alice', score: 0 });
+  room.addPlayer({ id: 'p2', name: 'Bob', score: 0 });
+
+  // 第 1 題
+  const t1 = room.targetDeck.pop();
+  room.startRound({
+    grid: emptyGrid(),
+    initialRobots: baseRobots(),
+    target: t1,
+    round: 1,
+  });
+  room.reportSolution('p1', 5);
+  room.endRound();
+  assert(room.phase === ROOM_PHASE.ROUND_END, '第 1 題結算後進入 ROUND_END');
+
+  // 第 2 題（最後一題）
+  const t2 = room.targetDeck.pop();
+  room.startRound({
+    grid: emptyGrid(),
+    initialRobots: baseRobots(),
+    target: t2,
+    round: 2,
+  });
+  room.reportSolution('p1', 6);
+  const finalRes = room.endRound();
+
+  assert(finalRes.gameOver === true, '牌堆抽完觸發 gameOver = true');
+  assert(room.phase === ROOM_PHASE.GAME_OVER, '狀態機轉入 GAME_OVER');
+
+  // 檢查終局頒獎台
+  const podium1 = room.getPodium();
+  assert(podium1.champions.length === 1 && podium1.champions[0].name === 'Alice', 'Alice 獨得 2 分獲勝為單一冠軍');
+  assert(podium1.isTie === false, '非平手');
+
+  // 測試平手共同獲勝情境
+  room.players.get('p2').score = 2; // 模擬 Bob 也是 2 分
+  const podiumTie = room.getPodium();
+  assert(podiumTie.champions.length === 2, 'Alice 與 Bob 同為 2 分');
+  assert(podiumTie.isTie === true, '共同獲勝平手標記 isTie = true');
+}
+
+// =====================================================
+section('6. 重新開始新的一局 (restartGame)');
+{
+  const room = new RoomState();
+  room.addPlayer({ id: 'p1', name: 'Alice', score: 5 });
+  room.addPlayer({ id: 'p2', name: 'Bob', score: 4 });
+  room.completedTargets = [{ color: 'red', shape: 'star', x: 0, y: 0 }];
+
+  const allTargets = [
+    { color: 'red', shape: 'star', x: 0, y: 0 },
+    { color: 'blue', shape: 'moon', x: 1, y: 1 },
+  ];
+  room.restartGame(allTargets);
+
+  assert(room.players.get('p1').score === 0, 'Alice 分數歸零');
+  assert(room.players.get('p2').score === 0, 'Bob 分數歸零');
+  assert(room.completedTargets.length === 0, '已完成目標清空');
+  assert(room.targetDeck.length === 2, '牌堆重置為完整目標數');
+  assert(room.phase === ROOM_PHASE.RACING, '重新開局為 RACING 階段');
+}
+
+// =====================================================
+section('7. 狀態快照序列化與反序列化 (Serialize / Deserialize)');
 {
   const room = new RoomState();
   const grid = emptyGrid();
@@ -235,19 +251,19 @@ section('6. 狀態快照序列化與反序列化 (Serialize / Deserialize)');
     initialRobots: baseRobots(),
     target: { color: 'red', shape: 'star', x: 3, y: 3 },
   });
-  room.addPlayer({ id: 'p1', name: 'Alice', score: 2 });
-  room.submitBid('p1', 4, 1000);
+  room.addPlayer({ id: 'p1', name: 'Alice', score: 3 });
+  room.reportSolution('p1', 6, { timestamp: 1234 });
 
   const snapshot = room.serialize();
-  assert(snapshot.phase === ROOM_PHASE.COUNTDOWN, '快照 phase 正確');
-  assert(snapshot.bids.length === 1 && snapshot.bids[0].moves === 4, '快照 bids 正確');
-  assert(snapshot.players.length === 1 && snapshot.players[0].score === 2, '快照 players 正確');
+  assert(snapshot.phase === ROOM_PHASE.RACING, '快照 phase 正確');
+  assert(snapshot.bids.length === 1 && snapshot.bids[0].moves === 6, '快照 bids 正確');
+  assert(snapshot.players.length === 1 && snapshot.players[0].score === 3, '快照 players 正確');
 
   const room2 = new RoomState();
   room2.deserialize(snapshot, grid);
-  assert(room2.phase === ROOM_PHASE.COUNTDOWN, '反序列化後 phase 一致');
-  assert(room2.bids[0].moves === 4, '反序列化後 bids 一致');
-  assert(room2.players.get('p1').score === 2, '反序列化後 player 分數一致');
+  assert(room2.phase === ROOM_PHASE.RACING, '反序列化後 phase 一致');
+  assert(room2.bids[0].moves === 6, '反序列化後 bids 一致');
+  assert(room2.players.get('p1').score === 3, '反序列化後 player 分數一致');
 }
 
 section('測試結果');
