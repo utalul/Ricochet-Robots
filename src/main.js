@@ -2007,7 +2007,6 @@ async function init() {
     inputController.attach();
 
     // 4. 再執行模式切換與 UI 掛載
-    const inviteRoomId = parseRoomFromHash();
     if (inviteRoomId) {
       let guestName = '玩家_' + Math.floor(100 + Math.random() * 900);
       const saved =
