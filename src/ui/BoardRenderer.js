@@ -204,6 +204,10 @@ export class BoardRenderer {
 
   /** 繪製靜態棋盤（格線、牆、卡榫、目標） */
   setBoard(grid) {
+    if (!grid || !Array.isArray(grid) || grid.length === 0) {
+      console.warn('[BoardRenderer] setBoard received invalid or null board, skipping render.');
+      return;
+    }
     this.grid = grid;
     this.size = grid.length;
     const C = this.cell;
@@ -364,6 +368,7 @@ export class BoardRenderer {
    * 更新機器人位置與選取狀態。
    */
   renderRobots(robots, selected, { animate = true } = {}) {
+    if (!robots || typeof robots !== 'object') return 0;
     let maxDur = 0;
     // 移除不在當前 robots 字典中的殘留機器人元素（例如切換 4 色/5 色時）
     for (const [c, g] of Object.entries(this.robotEls)) {

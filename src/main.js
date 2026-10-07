@@ -389,6 +389,21 @@ function switchGameMode(mode) {
           elTargetText.innerHTML = getTargetDescription(roomState.target);
         }
       }
+    } else {
+      // 尚未在房間中或剛切入多人模式：顯示底層棋盤預覽，目標蓋牌
+      if (currentGrid) {
+        renderer.setBoard(currentGrid);
+        renderer.setTarget(null);
+        if (soloGameState.grid) {
+          renderer.renderRobots(soloGameState.getRobots(), selectedRobot, { animate: false });
+        }
+      }
+      if (elTargetIcon) {
+        elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+      }
+      if (elTargetText) {
+        elTargetText.innerHTML = '<span style="color: var(--muted);">等待建立或加入房間以開始競賽</span>';
+      }
     }
   } else {
     // 切換回單人自由模式
@@ -399,15 +414,21 @@ function switchGameMode(mode) {
     }
     if (elTargetCardLabel) elTargetCardLabel.textContent = '本回合目標';
 
-    renderer.setBoard(currentGrid);
-    renderer.setTarget(currentTarget);
-    renderer.renderRobots(soloGameState.getRobots(), selectedRobot, { animate: false });
+    if (currentGrid) {
+      renderer.setBoard(currentGrid);
+      renderer.setTarget(currentTarget);
+      if (soloGameState.grid) {
+        renderer.renderRobots(soloGameState.getRobots(), selectedRobot, { animate: false });
+      }
+    }
     if (elTargetIcon) {
       elTargetIcon.innerHTML = '';
-      elTargetIcon.appendChild(createTargetIcon(currentTarget, 40));
+      if (currentTarget) {
+        elTargetIcon.appendChild(createTargetIcon(currentTarget, 40));
+      }
     }
     if (elTargetText) {
-      elTargetText.innerHTML = getTargetDescription(currentTarget);
+      elTargetText.innerHTML = currentTarget ? getTargetDescription(currentTarget) : '無目標';
     }
   }
 
@@ -596,34 +617,61 @@ function handleNextRound() {
   showToast(`第 ${soloSolvedCount + 1} 題已開始！`, 'info');
 }
 
+/** 載入版圖題庫 */
+async function loadBoardTemplates() {
+  let res = await fetch(DATA_URL).catch(() => null);
+  if (!res || !res.ok) {
+    res = await fetch(FALLBACK_DATA_URL);
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  allBoards = data.boards;
+  return allBoards;
+}
+
+/** 組合預設 16×16 大棋盤以供底層預覽與單機模式使用 */
+function assembleDefaultBoard() {
+  if (!allBoards || allBoards.length === 0) return null;
+  currentQuadBoards = pickQuadrantBoards(allBoards);
+  currentGrid = assembleBigBoard(...currentQuadBoards);
+  const targets = collectTargets(currentGrid);
+  targetDeck = createTargetDeck(targets);
+  const initialRobots = randomRobotPositions(currentGrid, Math.random, {
+    useSilver: useSilverRobot,
+  });
+  currentTarget = drawTarget(targetDeck, initialRobots);
+  soloSolvedCount = 0;
+  soloGameState.initRound(currentGrid, initialRobots, currentTarget);
+  return currentGrid;
+}
+
+/** 自網址 Hash 解析邀請房號 (如 #room=1234) */
+function parseRoomFromHash() {
+  if (typeof window === 'undefined') return null;
+  const match = window.location.hash.match(/room=([a-zA-Z0-9_-]+)/);
+  return match && match[1] ? match[1] : null;
+}
+
 /** 重新隨機洗牌組地圖 (M) */
 function handleNewGame() {
   hideSoloModal();
   hideGameOverModal();
 
   try {
-    currentQuadBoards = pickQuadrantBoards(allBoards);
-    currentGrid = assembleBigBoard(...currentQuadBoards);
-    const targets = collectTargets(currentGrid);
-    targetDeck = createTargetDeck(targets);
-    const initialRobots = randomRobotPositions(currentGrid, Math.random, {
-      useSilver: useSilverRobot,
-    });
-    currentTarget = drawTarget(targetDeck, initialRobots);
-    soloSolvedCount = 0;
+    assembleDefaultBoard();
 
-    soloGameState.initRound(currentGrid, initialRobots, currentTarget);
-
-    renderer.setBoard(currentGrid);
-    renderer.setTarget(currentTarget);
-    renderer.renderRobots(soloGameState.getRobots(), selectedRobot, { animate: false });
+    if (currentGrid) {
+      renderer.setBoard(currentGrid);
+      renderer.setTarget(currentTarget);
+      renderer.renderRobots(soloGameState.getRobots(), selectedRobot, { animate: false });
+    }
 
     if (elTargetIcon) {
       elTargetIcon.innerHTML = '';
-      elTargetIcon.appendChild(createTargetIcon(currentTarget, 40));
+      if (currentTarget) elTargetIcon.appendChild(createTargetIcon(currentTarget, 40));
     }
     if (elTargetText) {
-      elTargetText.innerHTML = getTargetDescription(currentTarget);
+      elTargetText.innerHTML = currentTarget ? getTargetDescription(currentTarget) : '';
     }
 
     updateHUD();
@@ -1254,6 +1302,20 @@ async function joinMultiplayerRoom(roomId, userName) {
     mpHUD.updatePhase(ROOM_PHASE.LOBBY);
     mpHUD.updatePlayers(roomState.getPlayerList(), false);
 
+    // 確保即使在 LOBBY 等待開局狀態，棋盤也有預設的底板背景，不會向 Renderer 傳入 null
+    if (roomState.grid) {
+      renderer.setBoard(roomState.grid);
+      if (roomState.initialRobots) {
+        renderer.renderRobots(roomState.initialRobots, selectedRobot, { animate: false });
+      }
+    } else if (currentGrid) {
+      renderer.setBoard(currentGrid);
+      if (soloGameState.grid) {
+        renderer.renderRobots(soloGameState.getRobots(), selectedRobot, { animate: false });
+      }
+    }
+    renderer.setTarget(null);
+
     if (elTargetIcon) {
       elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
     }
@@ -1274,16 +1336,15 @@ async function init() {
   try {
     renderer = new BoardRenderer(elBoard);
 
-    // 載入版圖題庫
-    let res = await fetch(DATA_URL).catch(() => null);
-    if (!res || !res.ok) {
-      res = await fetch(FALLBACK_DATA_URL);
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    allBoards = data.boards;
+    // 1. 確保版圖題庫資料完整載入
+    await loadBoardTemplates();
 
-    // 實例化多人 HUD
+    // 2. 若尚未產生大棋盤，先預設組合一組初始 16x16 棋盤以供底層預覽
+    if (!currentGrid) {
+      assembleDefaultBoard();
+    }
+
+    // 3. 實例化多人 HUD
     mpHUD = new MultiplayerHUD({
       container: elMpContainer,
       handlers: {
@@ -1440,26 +1501,20 @@ async function init() {
     });
     inputController.attach();
 
-    // 檢查網址 Hash 是否包含邀請房號 (如 #room=1234)
-    const hashMatch =
-      typeof window !== 'undefined'
-        ? window.location.hash.match(/room=([a-zA-Z0-9_-]+)/)
-        : null;
-    if (hashMatch && hashMatch[1]) {
-      const inviteRoomId = hashMatch[1];
+    // 4. 再執行模式切換與 UI 掛載
+    const inviteRoomId = parseRoomFromHash();
+    if (inviteRoomId) {
       const savedName =
-        localStorage.getItem('ricochet_player_name') ||
+        (typeof localStorage !== 'undefined' && localStorage.getItem('ricochet_player_name')) ||
         '玩家_' + Math.floor(100 + Math.random() * 900);
       if (mpHUD.inputName) mpHUD.inputName.value = savedName;
       if (mpHUD.inputRoom) mpHUD.inputRoom.value = inviteRoomId;
       await joinMultiplayerRoom(inviteRoomId, savedName);
     } else {
-      // 啟動單人自由模式第一局
       switchGameMode('solo');
-      handleNewGame();
     }
   } catch (err) {
-    console.error('遊戲載入失敗:', err);
+    console.error('[Init Failed]', err);
     if (elTargetText) {
       elTargetText.textContent = `載入失敗：${err.message}（請使用 HTTP 伺服器開啟，如 npm.cmd start）`;
     }

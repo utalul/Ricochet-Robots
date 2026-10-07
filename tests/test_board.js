@@ -318,6 +318,55 @@ section('11. 完整 12 張子版圖與 81 種全拼裝組合驗證 (boards.json)
   assert(validCombinations === 81, `所有 81 種子版圖拼裝組合（3^4）皆合規且具備完整 17 個目標（實際成功 ${validCombinations} 種）`);
 }
 
+// =====================================================
+section('12. BoardRenderer 空值防禦保護 (Null-safety Guard)');
+{
+  const { BoardRenderer } = await import('../src/ui/BoardRenderer.js');
+  const mockContainer = {
+    innerHTML: '',
+    appendChild: () => {},
+  };
+  const origDoc = globalThis.document;
+  globalThis.document = {
+    createElementNS: () => ({
+      setAttribute: () => {},
+      appendChild: () => {},
+      replaceChildren: () => {},
+      classList: { toggle: () => {} },
+      style: {},
+      remove: () => {},
+    }),
+  };
+
+  const renderer = new BoardRenderer(mockContainer);
+  let threwNull = false;
+  try {
+    renderer.setBoard(null);
+  } catch (e) {
+    threwNull = true;
+  }
+  assert(!threwNull, 'setBoard(null) 防禦檢查成功，未拋出 TypeError');
+  assert(renderer.grid === null, 'setBoard(null) 保持 grid 為 null');
+
+  let threwEmpty = false;
+  try {
+    renderer.setBoard([]);
+  } catch (e) {
+    threwEmpty = true;
+  }
+  assert(!threwEmpty, 'setBoard([]) 空陣列防禦檢查成功，未拋出例外');
+
+  let threwRobotsNull = false;
+  try {
+    renderer.renderRobots(null);
+  } catch (e) {
+    threwRobotsNull = true;
+  }
+  assert(!threwRobotsNull, 'renderRobots(null) 防禦檢查成功，未拋出例外');
+
+  globalThis.document = origDoc;
+}
+
 section('測試結果');
 console.log(`  通過: ${passed}  失敗: ${failed}`);
 if (failed > 0) process.exit(1);
