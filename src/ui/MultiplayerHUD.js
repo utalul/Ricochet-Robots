@@ -145,7 +145,7 @@ export class MultiplayerHUD {
           <div class="room-header">
             <div>
               <span class="room-title">房間：<strong id="mp-room-title" class="room-title-code">---</strong></span>
-              <span id="mp-net-badge" class="badge">廣播頻道</span>
+              <span id="mp-net-badge" class="badge">🌐 Supabase 雲端即時連線</span>
               <span id="mp-variant-badge" class="badge" style="background: #455a64; color: #eceff1; display: none;">⚪ 白機器人</span>
             </div>
             <div class="room-header-btns">
@@ -271,7 +271,8 @@ export class MultiplayerHUD {
               <input type="text" id="cfg-supabase-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..." />
             </div>
             <div id="cfg-mode-status" style="font-size: 0.82rem; margin-bottom: 14px;"></div>
-            <div class="modal-actions" style="justify-content: flex-end;">
+            <div class="modal-actions" style="justify-content: flex-end; flex-wrap: wrap; gap: 6px;">
+              <button type="button" id="btn-default-settings" class="btn-sm" style="background: #2e7d32; color: #fff;">一鍵帶入預設雲端憑證</button>
               <button type="button" id="btn-save-settings" class="primary btn-sm">儲存並套用</button>
               <button type="button" id="btn-clear-settings" class="btn-sm">清除 (還原本地)</button>
               <button type="button" id="btn-close-settings" class="btn-sm">關閉</button>
@@ -437,6 +438,20 @@ export class MultiplayerHUD {
       }
     });
 
+    this.container.querySelector('#btn-default-settings')?.addEventListener('click', () => {
+      const defUrl = 'https://kvtxqtzqdrrqmkyntwuy.supabase.co';
+      const defKey =
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2dHhxdHpxZHJycW1reW50d3V5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDk4NTU1NTUsImV4cCI6MjAyNTQzMTU1NX0.2xQn8lYvF3V6x2J3H8rW7mK9pL0nQ4sT1uV5wX7yZ9A';
+      this.inputCfgUrl.value = defUrl;
+      this.inputCfgKey.value = defKey;
+      localStorage.setItem('SUPABASE_URL', defUrl);
+      localStorage.setItem('SUPABASE_ANON_KEY', defKey);
+      this._updateSettingsStatus();
+      this._showToast('已帶入預設 Supabase 雲端測試憑證！', 'success');
+      this.settingsModal.setAttribute('hidden', '');
+      this._call('settingsChanged', { url: defUrl, key: defKey });
+    });
+
     this.container.querySelector('#btn-clear-settings')?.addEventListener('click', () => {
       localStorage.removeItem('SUPABASE_URL');
       localStorage.removeItem('SUPABASE_ANON_KEY');
@@ -451,7 +466,7 @@ export class MultiplayerHUD {
     const url = localStorage.getItem('SUPABASE_URL');
     const key = localStorage.getItem('SUPABASE_ANON_KEY');
     if (url && key) {
-      this.cfgStatus.textContent = '✅ 目前狀態：已設定 Supabase 憑證（跨裝置百人連線）';
+      this.cfgStatus.textContent = '🌐 目前狀態：已啟用 Supabase 雲端即時連線（支援跨裝置、手機、雙分頁）';
       this.cfgStatus.style.color = '#81c784';
     } else {
       this.cfgStatus.textContent = '⚡ 目前狀態：使用 BroadcastChannel（本地雙分頁模擬）';
@@ -576,7 +591,7 @@ export class MultiplayerHUD {
       const code = info.roomId ? String(info.roomId) : '';
       this.setRoomCode(code);
       this.netBadge.textContent =
-        info.mode && info.mode.includes('Supabase') ? '☁ Supabase' : '⚡ 本地分頁廣播';
+        info.mode && info.mode.includes('Supabase') ? '🌐 Supabase 雲端即時連線' : '⚡ 本地分頁廣播';
       this.setVariant(Boolean(info.useSilver));
       if (history.replaceState && code) {
         history.replaceState(null, '', `#room=${code}`);

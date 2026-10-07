@@ -352,23 +352,95 @@ export class RoomManager {
       this.mode = NETWORK_MODE.SUPABASE_REALTIME;
       let createClient = typeof window !== 'undefined' ? window.supabase?.createClient : null;
       if (!createClient) {
-        const mod = await import('https://esm.sh/@supabase/supabase-js@2');
-        createClient = mod.createClient;
+        try {
+          const mod = await import('https://esm.sh/@supabase/supabase-js@2');
+          createClient = mod.createClient;
+        } catch (e) {
+          console.warn('[Supabase SDK Dynamic Import Error]', e);
+        }
       }
+      if (!createClient) {
+        throw new Error('Supabase client SDK not available');
+      }
+
       this._supabase = createClient(config.url, config.anonKey);
-      const channelName = `room_${this.roomId}`;
+      const cleanRoomId = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+      const channelName = `room_${cleanRoomId}`;
       this._channel = this._supabase.channel(channelName, {
-        config: { broadcast: { self: false } },
+        config: {
+          broadcast: { self: false },
+          presence: { key: this.userId },
+        },
       });
 
+      // 1. 監聽廣播訊息 (room_msg 與 room_sync)
       this._channel.on('broadcast', { event: 'room_msg' }, (payload) => {
         this._handleIncomingMessage(payload.payload);
       });
+      this._channel.on('broadcast', { event: 'room_sync' }, (payload) => {
+        this._handleIncomingMessage(payload.payload);
+      });
 
-      await new Promise((resolve, reject) => {
-        this._channel.subscribe((status) => {
-          if (status === 'SUBSCRIBED') resolve();
-          else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      // 2. 監聽 Presence 狀態變化 (sync / join / leave)
+      this._channel.on('presence', { event: 'sync' }, () => {
+        const state = typeof this._channel.presenceState === 'function' ? this._channel.presenceState() : {};
+        console.log('[Supabase Presence Sync]', state);
+        const members = [];
+        for (const [key, presences] of Object.entries(state)) {
+          if (Array.isArray(presences) && presences.length > 0) {
+            const p = presences[0];
+            members.push({
+              id: p.id || key,
+              name: p.name || '玩家',
+              isHost: Boolean(p.isHost),
+              score: p.score || 0,
+            });
+          }
+        }
+        this._emit('presence_sync', { members, presenceState: state });
+      });
+
+      this._channel.on('presence', { event: 'join' }, ({ key, newPresences }) => {
+        console.log('[Supabase Presence Join]', key, newPresences);
+        if (Array.isArray(newPresences) && newPresences.length > 0) {
+          const p = newPresences[0];
+          const joinEvent = {
+            type: MSG_TYPE.PLAYER_JOIN,
+            player: { id: p.id || key, name: p.name || '玩家', isHost: Boolean(p.isHost) },
+            user: { id: p.id || key, name: p.name || '玩家' },
+          };
+          this._handleIncomingMessage(joinEvent);
+          this._emit(MSG_TYPE.PLAYER_JOIN, joinEvent);
+        }
+      });
+
+      this._channel.on('presence', { event: 'leave' }, ({ key }) => {
+        console.log('[Supabase Presence Leave]', key);
+        const leaveEvent = {
+          type: MSG_TYPE.PLAYER_LEAVE,
+          payload: { playerId: key },
+        };
+        this._handleIncomingMessage(leaveEvent);
+        this._emit(MSG_TYPE.PLAYER_LEAVE, leaveEvent);
+      });
+
+      await new Promise((resolve) => {
+        this._channel.subscribe(async (status) => {
+          console.log(`[Supabase Channel Status] ${channelName}:`, status);
+          if (status === 'SUBSCRIBED') {
+            try {
+              if (typeof this._channel.track === 'function') {
+                await this._channel.track({
+                  id: this.userId,
+                  name: this.userName,
+                  isHost: this.isHost,
+                });
+              }
+            } catch (e) {
+              console.warn('[Presence Track Error]', e);
+            }
+            resolve();
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             console.warn(`Supabase subscribe status ${status}, falling back to BroadcastChannel`);
             this._initBroadcastChannel();
             resolve();
@@ -417,18 +489,26 @@ export class RoomManager {
     }
 
     if (this._channel) {
+      if (typeof this._channel.untrack === 'function') {
+        try {
+          await this._channel.untrack();
+        } catch {}
+      }
+      if (typeof this._channel.unsubscribe === 'function') {
+        try {
+          await this._channel.unsubscribe();
+        } catch {}
+      }
       if (typeof this._channel.close === 'function') {
-        this._channel.close();
-      } else if (typeof this._channel.unsubscribe === 'function') {
-        this._channel.unsubscribe();
+        try {
+          this._channel.close();
+        } catch {}
       }
       this._channel = null;
     }
     this._emit('disconnected', { roomId: this.roomId });
     this.roomId = null;
   }
-
-  // ---------- 訊息發送與接收 ----------
 
   /**
    * 發送訊息封包給同房間所有其他玩家。
@@ -449,11 +529,17 @@ export class RoomManager {
     console.log(`[RoomSync] [Send ${type}]`, envelope);
 
     if (this.mode === NETWORK_MODE.SUPABASE_REALTIME && this._channel.send) {
+      const eventName =
+        type === MSG_TYPE.ROOM_SYNC || type === MSG_TYPE.ROOM_SYNC_PAYLOAD
+          ? 'room_sync'
+          : 'room_msg';
       this._channel.send({
         type: 'broadcast',
-        event: 'room_msg',
+        event: eventName,
         payload: envelope,
       });
+      // 雙保險：本地 LocalStorage 匯流排同步廣播
+      this.broadcast(envelope);
     } else {
       this.broadcast(envelope);
     }

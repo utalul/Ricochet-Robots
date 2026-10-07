@@ -841,9 +841,17 @@ function startGuestSnapshotWatcher(roomId, myId, myName) {
         localStorage.getItem(`rr_room_state_${cleanRoomId}`);
       if (!raw) return;
       const snapshot = JSON.parse(raw);
-      // 若尚未載入房主版圖，立刻同步
-      if (!currentGrid || (snapshot.boardConfig && currentQuadBoards.length === 0)) {
-        loadBoardFromConfig(snapshot.boardConfig);
+      // 若尚未載入房主版圖或版圖不一致，立刻同步
+      const hostQuadIds = snapshot.boardConfig;
+      const currentIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
+      const match =
+        Array.isArray(hostQuadIds) &&
+        hostQuadIds.length === 4 &&
+        currentIds.length === 4 &&
+        hostQuadIds.every((id, idx) => id === currentIds[idx]);
+
+      if (!match && Array.isArray(hostQuadIds) && hostQuadIds.length === 4) {
+        loadBoardFromConfig(hostQuadIds);
         const useSilver = Boolean(snapshot.useSilver);
         roomState.useSilver = useSilver;
         updateRobotVariantUI(useSilver);
@@ -1033,7 +1041,7 @@ function setupMultiplayerNetwork() {
     }
 
     // (E) 玩家名單同步
-    const rawMembers = payload.members || payload.snapshot?.players;
+    const rawMembers = payload.members || payload.players || payload.snapshot?.players;
     const membersList = Array.isArray(rawMembers)
       ? rawMembers
       : rawMembers instanceof Map
@@ -1373,6 +1381,65 @@ function setupMultiplayerNetwork() {
       }
     });
   }
+
+  // 9. 監聽 Supabase Presence 即時名單同步 (跨設備 / 雙分頁 100% 同步)
+  roomManager.on('presence_sync', ({ members }) => {
+    console.log('[Presence Sync] Members received:', members);
+    if (!Array.isArray(members) || members.length === 0) return;
+
+    // 將所有在線成員合併至 roomState
+    members.forEach((m) => {
+      const existing = roomState.getPlayer(m.id);
+      if (!existing) {
+        roomState.addPlayer({
+          id: m.id,
+          name: m.name || '玩家',
+          isHost: Boolean(m.isHost),
+          score: m.score || 0,
+        });
+      } else {
+        if (m.name) existing.name = m.name;
+        existing.isHost = Boolean(m.isHost);
+      }
+    });
+
+    // 確保當前用戶也在名單中
+    roomState.addPlayer({
+      id: roomManager.userId,
+      name: roomManager.userName,
+      isHost: roomManager.isHost,
+    });
+
+    // 更新 HUD 玩家列表及在線人數
+    mpHUD.updatePlayers(roomState.getPlayerList(), roomManager.isHost);
+
+    // 如果自己是房主，向新加入的成員廣播最新全量房間狀態 (ROOM_SYNC)
+    if (roomManager.isHost) {
+      updateRoomSnapshot();
+      const quadIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
+      const initRobots =
+        roomState.initialRobots ||
+        (localMultiGameState.grid ? localMultiGameState.getRobots() : null) ||
+        (currentGrid ? randomRobotPositions(currentGrid) : null);
+
+      const syncInfo = {
+        type: MSG_TYPE.ROOM_SYNC,
+        hostId: roomManager.userId,
+        players: roomState.getPlayerList(),
+        members: roomState.getPlayerList(),
+        boardConfig: quadIds,
+        robotPositions: initRobots,
+        useSilver: Boolean(roomState.useSilver),
+        target: roomState.target,
+        round: roomState.round,
+        phase: roomState.phase,
+        snapshot: roomState.serialize(),
+      };
+      console.log('[Presence Sync] Host broadcasting ROOM_SYNC:', syncInfo);
+      roomManager.send(MSG_TYPE.ROOM_SYNC, syncInfo);
+      roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, syncInfo);
+    }
+  });
 }
 
 /** 呈現回合結算結果視窗 */
@@ -1643,38 +1710,48 @@ async function joinMultiplayerRoom(roomId, userName) {
   if (!cleanRoomId) return;
   switchGameMode('multi');
   try {
+    if (!allBoards || allBoards.length === 0) {
+      await loadBoardTemplates();
+    }
+
     const myId = roomManager.userId;
     const myName = (userName && userName.trim()) || roomManager.userName || '玩家';
     roomManager.userName = myName;
 
-    // 1. 第一行程式碼直接讀取 LocalStorage 快照！
-    let raw = null;
+    // 1. 訪客以訪客身分連線 (isHost 永遠為 false，絕不擅自成為房主)
+    const info = await roomManager.joinRoom(cleanRoomId, myName);
+    info.isHost = false;
+    roomState.roomId = cleanRoomId;
+    roomState.phase = ROOM_PHASE.LOBBY;
+
+    // 2. 嘗試讀取本地快照以供即時無延遲預覽
+    let snapshot = null;
     if (typeof localStorage !== 'undefined') {
-      raw =
+      const raw =
         localStorage.getItem(`rr_snapshot_${cleanRoomId}`) ||
         localStorage.getItem(`rr_room_state_${cleanRoomId}`);
-    }
-    console.log('[Snapshot Read]', raw);
-
-    let snapshot = null;
-    if (raw) {
-      try {
-        snapshot = JSON.parse(raw);
-      } catch (err) {
-        console.warn('[Snapshot Read Parse Error]', err);
+      if (raw) {
+        try {
+          snapshot = JSON.parse(raw);
+        } catch (err) {
+          console.warn('[Snapshot Read Parse Error]', err);
+        }
       }
     }
 
     if (snapshot) {
-      // 1. 強制以房主版圖與機器人渲染
-      loadBoardFromConfig(snapshot.boardConfig);
+      if (Array.isArray(snapshot.boardConfig) && snapshot.boardConfig.length === 4) {
+        loadBoardFromConfig(snapshot.boardConfig);
+      }
       const useSilver = Boolean(snapshot.useSilver);
       roomState.useSilver = useSilver;
       updateRobotVariantUI(useSilver);
       if (mpHUD) mpHUD.setVariant(useSilver);
-      loadRobotsFromPositions(snapshot.robotPositions);
+      if (snapshot.robotPositions) {
+        loadRobotsFromPositions(snapshot.robotPositions);
+      }
 
-      // 2. 將自己加入 players 清單並回寫
+      // 將自己加入快照玩家清單並回寫
       if (!Array.isArray(snapshot.players)) snapshot.players = [];
       const existingIdx = snapshot.players.findIndex(
         (p) => p.id === myId || (!p.isHost && p.name === myName)
@@ -1690,102 +1767,43 @@ async function joinMultiplayerRoom(roomId, userName) {
         localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(snapshot));
       }
 
-      // 3. 雙方更新在線人數為 2
       roomState.players.clear();
       snapshot.players.forEach((p) => roomState.addPlayer(p));
-      if (mpHUD) mpHUD.updatePlayers(snapshot.players, false);
-
-      const info = await roomManager.joinRoom(cleanRoomId, myName);
-      info.isHost = false;
-      roomState.roomId = cleanRoomId;
-      roomState.phase = snapshot.phase || ROOM_PHASE.LOBBY;
-
-      mpHUD.setInRoom(true, info);
-      mpHUD.updatePhase(snapshot.phase || ROOM_PHASE.LOBBY);
-      mpHUD.updatePlayers(roomState.getPlayerList(), false);
-      renderer.setTarget(null);
-
-      if (elTargetIcon) {
-        elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
-      }
-      if (elTargetText) {
-        elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
-      }
-
-      startGuestSnapshotWatcher(cleanRoomId, myId, myName);
-
-      // 廣播加入通知 (PLAYER_JOIN 與 HELLO_JOIN)
-      const joinMsg = {
-        player: { id: myId, name: myName, isHost: false },
-        user: { id: myId, name: myName },
-        players: roomState.getPlayerList(),
-      };
-      roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
-      roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
-      startSyncRetry();
-
-      showToast(`成功加入房間【${cleanRoomId}】！地圖與玩家名單已同步完成 🎮`, 'success');
     } else {
-      // 若尚未存在快照，本分頁為房主建立者
-      console.log('[Snapshot Not Found] Initializing as room host:', cleanRoomId);
-      if (!allBoards || allBoards.length === 0) {
-        await loadBoardTemplates();
-      }
-      currentQuadBoards = pickQuadrantBoards(allBoards);
-      currentGrid = assembleBigBoard(...currentQuadBoards);
-      renderer.setBoard(currentGrid);
-
-      const allTargets = collectTargets(currentGrid);
-      roomState.setTargetDeck(createTargetDeck(allTargets));
-
-      const initRobots = randomRobotPositions(currentGrid, Math.random, {
-        useSilver: roomState.useSilver,
-      });
-      roomState.initialRobots = initRobots;
-      renderer.setTarget(null);
-      renderer.renderRobots(initRobots, selectedRobot, { animate: false });
-
-      const hostSnapshot = {
-        roomId: cleanRoomId,
-        hostId: myId,
-        hostName: myName,
-        boardConfig: currentQuadBoards.map((b) => b.board_id),
-        robotPositions: initRobots,
-        useSilver: Boolean(roomState.useSilver),
-        players: [{ id: myId, name: myName, isHost: true, score: 0 }],
-        phase: ROOM_PHASE.LOBBY,
-        round: 0,
-        updatedAt: Date.now(),
-      };
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(`rr_snapshot_${cleanRoomId}`, JSON.stringify(hostSnapshot));
-        localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(hostSnapshot));
-        console.log('[Snapshot Saved]', hostSnapshot);
-      }
-
-      const info = await roomManager.createRoom(cleanRoomId, myName);
-      info.isHost = true;
-      roomState.roomId = cleanRoomId;
-      roomState.phase = ROOM_PHASE.LOBBY;
+      // 尚未有本地快照，先初始化自己為房間訪客玩家
       roomState.players.clear();
-      roomState.addPlayer({ id: myId, name: myName, isHost: true });
-
-      if (elTargetIcon) {
-        elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
-      }
-      if (elTargetText) {
-        elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
-      }
-
-      mpHUD.setInRoom(true, info);
-      mpHUD.updatePhase(ROOM_PHASE.LOBBY);
-      mpHUD.updatePlayers(roomState.getPlayerList(), true);
-
-      startHostSnapshotPolling(cleanRoomId);
-      showToast(`房間【${cleanRoomId}】建立成功！等待玩家加入大廳 👑`, 'success');
+      roomState.addPlayer({ id: myId, name: myName, isHost: false, score: 0 });
     }
+
+    // 3. 設定 HUD 狀態（訪客身分）
+    mpHUD.setInRoom(true, info);
+    mpHUD.updatePhase(ROOM_PHASE.LOBBY);
+    mpHUD.updatePlayers(roomState.getPlayerList(), false);
+    renderer.setTarget(null);
+
+    if (elTargetIcon) {
+      elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+    }
+    if (elTargetText) {
+      elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
+    }
+
+    startGuestSnapshotWatcher(cleanRoomId, myId, myName);
+
+    // 4. 廣播加入通知與狀態索取
+    const joinMsg = {
+      player: { id: myId, name: myName, isHost: false },
+      user: { id: myId, name: myName },
+      players: roomState.getPlayerList(),
+    };
+    roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
+    roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
+    roomManager.send(MSG_TYPE.REQUEST_ROOM_SYNC, { requesterId: myId });
+    startSyncRetry();
+
+    showToast(`成功加入房間【${cleanRoomId}】！等待房主開始遊戲... 🎮`, 'info');
   } catch (err) {
-    console.error('加入/建立房間失敗:', err);
+    console.error('加入房間失敗:', err);
     showToast('連線失敗：' + err.message, 'warn');
   }
 }
