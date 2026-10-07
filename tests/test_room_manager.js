@@ -297,6 +297,78 @@ async function runTest() {
   await hostMgr.leaveRoom();
   await guestMgr.leaveRoom();
 
+  section('7. 大廳雙向握手 (REQUEST_ROOM_SYNC -> ROOM_SYNC_PAYLOAD -> ROOM_SYNC_ACK)');
+  const handshakeRoomId = 'room_hs_' + Date.now();
+  const hostHS = new RoomManager();
+  const guestHS = new RoomManager();
+
+  let hostGotReq = null;
+  let guestGotPayload = null;
+  let hostGotAck = null;
+
+  // 房主監聽握手請求
+  hostHS.on(MSG_TYPE.REQUEST_ROOM_SYNC, (data) => {
+    hostGotReq = data;
+    // 房主回應 ROOM_SYNC_PAYLOAD
+    hostHS.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, {
+      hostId: hostHS.userId,
+      members: [
+        { id: hostHS.userId, name: hostHS.userName, isHost: true },
+        { id: data.senderId, name: data.senderName, isHost: false },
+      ],
+      boardConfig: ['A_01', 'B_02', 'C_03', 'D_01'],
+      robotPositions: { red: { r: 5, c: 5 }, blue: { r: 6, c: 6 } },
+      useSilver: true,
+    });
+  });
+
+  // 訪客監聽同步負載
+  guestHS.on(MSG_TYPE.ROOM_SYNC_PAYLOAD, (data) => {
+    guestGotPayload = data;
+    // 訪客回傳 ACK
+    guestHS.send(MSG_TYPE.ROOM_SYNC_ACK, {
+      guestId: guestHS.userId,
+      guestName: guestHS.userName,
+    });
+  });
+
+  // 房主監聽 ACK
+  hostHS.on(MSG_TYPE.ROOM_SYNC_ACK, (data) => {
+    hostGotAck = data;
+  });
+
+  await hostHS.createRoom(handshakeRoomId, 'HostAlice');
+  await guestHS.joinRoom(handshakeRoomId, 'GuestBob');
+
+  // 模擬訪客 50ms 後發送 REQUEST_ROOM_SYNC
+  await sleep(60);
+  guestHS.send(MSG_TYPE.REQUEST_ROOM_SYNC, {
+    sender: { id: guestHS.userId, name: guestHS.userName },
+  });
+
+  await sleep(100);
+
+  assert(hostGotReq !== null, '房主成功收到訪客之 REQUEST_ROOM_SYNC 廣播');
+  assert(hostGotReq?.senderName === 'GuestBob', 'REQUEST_ROOM_SYNC 包含訪客姓名 GuestBob');
+  assert(guestGotPayload !== null, '訪客成功收到房主之 ROOM_SYNC_PAYLOAD 廣播');
+  assert(
+    guestGotPayload?.payload?.boardConfig?.[1] === 'B_02',
+    'ROOM_SYNC_PAYLOAD 包含正確的 boardConfig (B_02)'
+  );
+  assert(
+    guestGotPayload?.payload?.useSilver === true,
+    'ROOM_SYNC_PAYLOAD 包含 useSilver: true'
+  );
+  assert(
+    guestGotPayload?.payload?.members?.length === 2,
+    'ROOM_SYNC_PAYLOAD 包含 2 位在線成員'
+  );
+  assert(hostGotAck !== null, '房主成功收到訪客之 ROOM_SYNC_ACK 回應');
+  assert(hostGotAck?.payload?.guestName === 'GuestBob', 'ROOM_SYNC_ACK 訪客姓名為 GuestBob');
+
+  await hostHS.leaveRoom();
+  await guestHS.leaveRoom();
+
   section('測試結果');
   console.log(`  通過: ${passed}  失敗: ${failed}`);
   if (failed > 0) process.exit(1);

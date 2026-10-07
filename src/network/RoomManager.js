@@ -15,9 +15,12 @@ export const NETWORK_MODE = Object.freeze({
 });
 
 export const MSG_TYPE = Object.freeze({
-  HELLO_JOIN: 'HELLO_JOIN',         // 新玩家主動送出加入廣播
-  SYNC_STATE: 'SYNC_STATE',         // 房主回送全狀態同步 (地圖配置、機器人起點、變體開關、玩家名單)
-  PRESENCE_PING: 'PRESENCE_PING',   // 在線心跳 Ping (每 2 秒一次維護在線玩家名單)
+  REQUEST_ROOM_SYNC: 'REQUEST_ROOM_SYNC', // 訪客主動向房主索取狀態
+  ROOM_SYNC_PAYLOAD: 'ROOM_SYNC_PAYLOAD', // 房主回傳完整地圖與成員狀態
+  ROOM_SYNC_ACK: 'ROOM_SYNC_ACK',         // 訪客收到同步後回傳 ACK
+  HELLO_JOIN: 'HELLO_JOIN',               // 新玩家主動送出加入廣播
+  SYNC_STATE: 'SYNC_STATE',               // 房主回送全狀態同步 (地圖配置、機器人起點、變體開關、玩家名單)
+  PRESENCE_PING: 'PRESENCE_PING',         // 在線心跳 Ping (每 2 秒一次維護在線玩家名單)
   PLAYER_JOIN: 'PLAYER_JOIN',
   PLAYER_LEAVE: 'PLAYER_LEAVE',
   SYNC_REQUEST: 'SYNC_REQUEST',
@@ -72,6 +75,14 @@ export class RoomManager {
     this._supabase = null;
     this._heartbeatTimer = null;
     this._listeners = new Map();
+  }
+
+  get channel() {
+    return this._channel;
+  }
+
+  set channel(ch) {
+    this._channel = ch;
   }
 
   getEffectiveMode() {
@@ -214,9 +225,31 @@ export class RoomManager {
       this._channel = null;
     }
     this._channel = new BroadcastChannel(channelName);
-    this._channel.onmessage = (event) => {
-      this._handleIncomingMessage(event.data);
+
+    const onMessage = (event) => {
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        console.log('[Broadcast Received]', data);
+        this._handleIncomingMessage(data);
+      } catch (err) {
+        console.error('[Broadcast Message Parse Error]', err);
+      }
     };
+
+    if (typeof this._channel.addEventListener === 'function') {
+      this._channel.addEventListener('message', onMessage);
+    } else {
+      this._channel.onmessage = onMessage;
+    }
+  }
+
+  broadcast(msg) {
+    if (!this._channel) return;
+    try {
+      this._channel.postMessage(JSON.stringify(msg));
+    } catch (err) {
+      console.error('[Broadcast Post Error]', err);
+    }
   }
 
   async _initSupabase(config) {
@@ -314,7 +347,10 @@ export class RoomManager {
       senderName: this.userName,
       timestamp: Date.now(),
       payload,
+      ...payload,
     };
+
+    console.log(`[RoomSync] [Send ${type}]`, envelope);
 
     if (this.mode === NETWORK_MODE.SUPABASE_REALTIME && this._channel.send) {
       this._channel.send({
@@ -322,22 +358,29 @@ export class RoomManager {
         event: 'room_msg',
         payload: envelope,
       });
-    } else if (this._channel.postMessage) {
-      this._channel.postMessage(envelope);
+    } else {
+      this.broadcast(envelope);
     }
   }
 
   _handleIncomingMessage(msg) {
-    if (!msg || msg.roomId !== this.roomId) return;
-    if (msg.senderId === this.userId) return;
+    if (!msg) return;
+    if (msg.roomId && String(msg.roomId).trim() !== String(this.roomId).trim()) return;
+    const senderId = msg.senderId || msg.sender?.id || msg.hostId || msg.payload?.sender?.id;
+    if (senderId && senderId === this.userId) return;
 
-    this._emit(msg.type, {
+    console.log(`[RoomSync] [Received ${msg.type}] from ${senderId || 'unknown'}:`, msg);
+
+    const emitted = {
       type: msg.type,
-      senderId: msg.senderId,
-      senderName: msg.senderName,
-      timestamp: msg.timestamp,
-      payload: msg.payload || {},
-    });
+      senderId: senderId || '',
+      senderName: msg.senderName || msg.sender?.name || msg.payload?.sender?.name || '',
+      timestamp: msg.timestamp || Date.now(),
+      payload: msg.payload || msg,
+      ...msg,
+    };
+
+    this._emit(msg.type, emitted);
   }
 
   // ---------- 語意化動作介面 ----------
