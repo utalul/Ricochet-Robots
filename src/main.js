@@ -1749,8 +1749,8 @@ function handleRestartGame() {
   }
 }
 
-async function joinMultiplayerRoom(roomId, userName) {
-  const cleanRoomId = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
+async function joinRoomWithRetry(roomId, userName) {
+  const cleanRoomId = String(roomId || '').trim().replace(/[^a-zA-Z0-9]/g, '');
   if (!cleanRoomId) return;
   stopHostPolling();
   stopGuestPolling();
@@ -1761,35 +1761,48 @@ async function joinMultiplayerRoom(roomId, userName) {
       await loadBoardTemplates();
     }
 
-    const myId = roomManager.userId;
-    const myName = (userName && userName.trim()) || roomManager.userName || '玩家';
-    roomManager.userName = myName;
-    roomManager.isHost = false;
-    roomManager.roomId = cleanRoomId;
-
-    // 1. 取得房號，直接讀取 const raw = localStorage.getItem('RR_ROOM_8183')
-    let raw = null;
-    if (typeof localStorage !== 'undefined') {
-      raw =
-        localStorage.getItem(`RR_ROOM_${cleanRoomId}`) ||
-        localStorage.getItem(`rr_snapshot_${cleanRoomId}`);
-    }
-
-    // 若無資料：alert('找不到該房間，請確認房主已建立！'); return;
-    if (!raw) {
-      alert('找不到該房間，請確認房主已建立！');
-      switchGameMode('solo');
-      return;
-    }
-
+    const key = `RR_ROOM_${cleanRoomId}`;
     let roomData = null;
-    try {
-      roomData = JSON.parse(raw);
-    } catch (err) {
-      alert('讀取房間資料失敗');
+
+    // 溫和輪詢重試讀取房主建立的房間資料（最多 5 次，每次間隔 300ms，合計 1.5 秒緩衝）
+    for (let i = 0; i < 5; i++) {
+      let raw = null;
+      if (typeof localStorage !== 'undefined') {
+        raw =
+          localStorage.getItem(key) ||
+          localStorage.getItem(`rr_snapshot_${cleanRoomId}`) ||
+          localStorage.getItem(`rr_room_state_${cleanRoomId}`);
+      }
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed.boardConfig) && parsed.boardConfig.length === 4) {
+            roomData = parsed;
+            console.log(`[joinRoomWithRetry] 成功於第 ${i + 1} 次讀取到房間資料:`, roomData);
+            break;
+          }
+        } catch (e) {
+          console.warn(`[joinRoomWithRetry] 快照解析重試 (${i + 1}/5):`, e);
+        }
+      }
+      if (i < 4) {
+        await new Promise((res) => setTimeout(res, 300));
+      }
+    }
+
+    // 若重試後依然無資料：提示並安全退出回單人模式
+    if (!roomData) {
+      alert('找不到該房間，請確認房主已建立！');
+      if (!currentGrid) {
+        assembleDefaultBoard();
+      }
       switchGameMode('solo');
       return;
     }
+
+    const myName = (userName && userName.trim()) || roomManager.userName || '玩家';
+    await roomManager.joinRoom(cleanRoomId, myName);
+    const myId = roomManager.userId;
 
     // 2. 強制使用房主資料渲染
     // 呼叫現有的版圖拼裝函式，傳入 roomData.boardConfig 拼裝同一張地圖
@@ -1883,6 +1896,8 @@ async function joinMultiplayerRoom(roomId, userName) {
     showToast('連線失敗：' + err.message, 'warn');
   }
 }
+
+const joinMultiplayerRoom = joinRoomWithRetry;
 
 // ---------- 初始化主程序 ----------
 
@@ -1991,7 +2006,7 @@ async function init() {
           }
         },
         joinRoom: async ({ roomId, userName }) => {
-          await joinMultiplayerRoom(roomId, userName);
+          await joinRoomWithRetry(roomId, userName);
         },
         leaveRoom: async () => {
           stopSyncRetry();
@@ -2125,7 +2140,7 @@ async function init() {
       }
       if (mpHUD.inputName) mpHUD.inputName.value = guestName;
       if (mpHUD.inputRoom) mpHUD.inputRoom.value = inviteRoomId;
-      await joinMultiplayerRoom(inviteRoomId, guestName);
+      await joinRoomWithRetry(inviteRoomId, guestName);
     } else {
       switchGameMode('solo');
     }
@@ -2145,7 +2160,7 @@ async function init() {
           mpHUD?.inputName?.value?.trim() ||
           '玩家_' + Math.floor(100 + Math.random() * 900);
         if (mpHUD?.inputRoom) mpHUD.inputRoom.value = inviteId;
-        await joinMultiplayerRoom(inviteId, name);
+        await joinRoomWithRetry(inviteId, name);
       }
     });
   } catch (err) {
