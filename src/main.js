@@ -21,13 +21,7 @@ import { RoomManager, MSG_TYPE } from './network/RoomManager.js';
 import { RoomState, ROOM_PHASE, BID_STATUS } from './network/RoomState.js';
 import { MultiplayerHUD } from './ui/MultiplayerHUD.js';
 
-// 全域捕獲未處理 Promise Rejection，防止程式異常中斷
-if (typeof window !== 'undefined') {
-  window.addEventListener('unhandledrejection', (event) => {
-    console.warn('🔥 全域捕獲未處理 Promise Rejection：', event.reason);
-    event.preventDefault();
-  });
-}
+
 
 const DATA_URL = new URL('./data/boards.json', import.meta.url);
 const FALLBACK_DATA_URL = new URL('./data/sample_boards.json', import.meta.url);
@@ -1820,6 +1814,9 @@ async function joinRoomWithRetry(roomId, userName) {
   }
 
   // 2. 立即同步地圖與機器人
+  if (!allBoards || allBoards.length === 0) {
+    await loadBoardTemplates();
+  }
   loadBoardFromConfig(roomData.boardConfig);
   if (roomData.robotPositions) {
     loadRobotsFromPositions(roomData.robotPositions);
@@ -1835,10 +1832,21 @@ async function joinRoomWithRetry(roomId, userName) {
 
   // 3. 更新 players 名單回存
   const myUserId = roomManager.userId;
-  const myUserName = (userName && userName.trim()) || roomManager.userName || '玩家';
+  let myUserName = (userName && userName.trim()) || '';
+  if (!myUserName || myUserName === 'Player') {
+    const saved =
+      (typeof localStorage !== 'undefined' && localStorage.getItem('ricochet_player_name')) || null;
+    if (saved && !saved.startsWith('玩家_')) {
+      myUserName = saved + '_2';
+    } else {
+      myUserName = '玩家_' + Math.floor(100 + Math.random() * 900);
+    }
+  }
   roomManager.userName = myUserName;
   roomManager.isHost = false;
   roomManager.roomId = cleanId;
+  if (mpHUD?.inputName) mpHUD.inputName.value = myUserName;
+  if (mpHUD?.inputRoom) mpHUD.inputRoom.value = cleanId;
 
   if (!Array.isArray(roomData.players)) roomData.players = [];
   const existingIdx = roomData.players.findIndex(
@@ -1928,14 +1936,7 @@ async function init() {
     // 1. 確保版圖題庫資料完整載入
     await loadBoardTemplates();
 
-    const inviteRoomId = parseRoomFromHash();
-
-    // 2. 若尚未產生大棋盤，且非邀請入房模式，先預設組合一組初始 16x16 棋盤以供底層預覽
-    if (!inviteRoomId && !currentGrid) {
-      assembleDefaultBoard();
-    }
-
-    // 3. 實例化多人 HUD
+    // 2. 實例化多人 HUD
     mpHUD = new MultiplayerHUD({
       container: elMpContainer,
       handlers: {
@@ -2182,22 +2183,7 @@ async function init() {
     });
     inputController.attach();
 
-    // 4. 再執行模式切換與 UI 掛載
-    if (inviteRoomId) {
-      let guestName = '玩家_' + Math.floor(100 + Math.random() * 900);
-      const saved =
-        (typeof localStorage !== 'undefined' && localStorage.getItem('ricochet_player_name')) || null;
-      if (saved && !saved.startsWith('玩家_')) {
-        guestName = saved + '_2';
-      }
-      if (mpHUD.inputName) mpHUD.inputName.value = guestName;
-      if (mpHUD.inputRoom) mpHUD.inputRoom.value = inviteRoomId;
-      await joinRoomWithRetry(inviteRoomId, guestName);
-    } else {
-      switchGameMode('solo');
-    }
-
-    // 5. 監聽網址 Hash 變動（例如使用者在已開啟的分頁貼上 #room=xxxx）
+    // 4. 監聽網址 Hash 變動（例如使用者在已開啟的分頁貼上 #room=xxxx）
     window.addEventListener('hashchange', () => {
       (async () => {
         if (roomManager.isHost) return;
@@ -2219,6 +2205,26 @@ async function init() {
         console.warn('🔥 [Hashchange Error Caught]:', err);
       });
     });
+
+    // 5. 檢查網址 Hash 邀請房號
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const match = hash.match(/room=([a-zA-Z0-9]+)/);
+    if (match && match[1]) {
+      const targetRoomId = match[1];
+      console.log('🎯 檢測到邀請連結，準備以訪客身分直接加入：', targetRoomId);
+      switchGameMode('multi');
+      const success = await joinRoomWithRetry(targetRoomId);
+      if (success) {
+        console.log('🎉 訪客成功透過 URL Hash 加入房間：', targetRoomId);
+        return;
+      }
+    }
+
+    // 如果沒有 hash 或加入失敗，才執行原本的單人遊戲初始化！
+    if (!currentGrid) {
+      assembleDefaultBoard();
+    }
+    switchGameMode('solo');
   } catch (err) {
     console.error('[Init Failed]', err);
     if (elTargetText) {
@@ -2228,6 +2234,14 @@ async function init() {
   }
 }
 
-init().catch((err) => {
-  console.warn('🔥 [Init Error Caught]:', err);
-});
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      init().catch((err) => console.warn('🔥 [Init Error Caught]:', err));
+    });
+  } else {
+    init().catch((err) => console.warn('🔥 [Init Error Caught]:', err));
+  }
+} else {
+  init().catch((err) => console.warn('🔥 [Init Error Caught]:', err));
+}

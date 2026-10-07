@@ -284,10 +284,6 @@ export class RoomManager {
     // 2. 同步發送 BroadcastChannel 作為雙重保障
     if (this._channel) {
       try {
-        const msgType = msg?.type || (typeof msg === 'object' && msg?.payload?.type);
-        if (msgType !== MSG_TYPE.PRESENCE_PING) {
-          console.log('[DEBUG_CHANNEL_SEND]', msg);
-        }
         this._channel.postMessage(typeof msg === 'string' ? msg : JSON.stringify(envelope));
       } catch (err) {
         console.error('[Broadcast Post Error]', err);
@@ -532,10 +528,7 @@ export class RoomManager {
       ...payload,
     };
 
-    if (type !== MSG_TYPE.PRESENCE_PING) {
-      console.log(`[RoomSync] [Send ${type}]`, envelope);
-    }
-
+    // 静默发送消息
     if (this.mode === NETWORK_MODE.SUPABASE_REALTIME && this._channel.send) {
       const eventName =
         type === MSG_TYPE.ROOM_SYNC || type === MSG_TYPE.ROOM_SYNC_PAYLOAD
@@ -592,9 +585,7 @@ export class RoomManager {
       }
     }
 
-    if (msg.type !== MSG_TYPE.PRESENCE_PING) {
-      console.log(`[RoomSync] [Received ${msg.type}] from ${senderId || 'unknown'}:`, msg);
-    }
+
 
     const senderName =
       msg.senderName ||

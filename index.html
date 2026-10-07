@@ -1,17 +1,18 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+  <script>
+    window.addEventListener('unhandledrejection', function(e) {
+      console.group('🔥 抓到致命 Promise 拒絕：');
+      console.error('Reason Object:', e.reason);
+      console.error('Stack:', e.reason?.stack || 'No stack');
+      console.groupEnd();
+    });
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>碰撞機器人 Ricochet Robots</title>
   <link rel="stylesheet" href="./style.css" />
-  <script>
-    // 全域捕獲未處理 Promise 拒絕，徹底消除 (index):1 的 Uncaught (in promise)
-    window.addEventListener('unhandledrejection', function (event) {
-      console.warn('🔥 全域捕獲未處理 Promise Rejection：', event.reason);
-      event.preventDefault();
-    });
-  </script>
 </head>
 <body>
   <header class="app-header">
@@ -165,6 +166,8 @@
     </div>
   </div>
 
-  <script type="module" src="./src/main.js"></script>
+  <script type="module">
+    import('./src/main.js?v=' + Date.now()).catch((err) => console.error('載入失敗:', err));
+  </script>
 </body>
 </html>
