@@ -76,6 +76,8 @@ export class RoomManager {
     this._supabase = null;
     this._heartbeatTimer = null;
     this._listeners = new Map();
+    this._storageHandler = null;
+    this._recentPackets = new Set();
   }
 
   get channel() {
@@ -179,6 +181,9 @@ export class RoomManager {
       this._initBroadcastChannel();
     }
 
+    // 綁定 LocalStorage 共享狀態匯流排監聽（同瀏覽器跨分頁 100% 觸發）
+    this._bindStorageListener();
+
     this._emit('connected', {
       roomId: this.roomId,
       userId: this.userId,
@@ -259,12 +264,83 @@ export class RoomManager {
   }
 
   broadcast(msg) {
-    if (!this._channel) return;
+    const envelope = {
+      ...(typeof msg === 'object' && msg !== null ? msg : { payload: msg }),
+      _senderId: this.userId,
+      _roomId: String(this.roomId || ''),
+      _time: Date.now() + Math.random(), // 保證每次寫入 storage 的 value 都不同，強制觸發 storage 事件
+    };
+
+    // 1. 寫入 LocalStorage（跨分頁 100% 觸發 storage 事件）
     try {
-      console.log('[DEBUG_CHANNEL_SEND]', msg);
-      this._channel.postMessage(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    } catch (err) {
-      console.error('[Broadcast Post Error]', err);
+      if (typeof localStorage !== 'undefined' && this.roomId) {
+        const cleanRoomId = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+        const busKey = `rr_bus_${cleanRoomId}`;
+        localStorage.setItem(busKey, JSON.stringify(envelope));
+      }
+    } catch (e) {
+      console.warn('[LocalStorage Bus Write Error]', e);
+    }
+
+    // 2. 同步發送 BroadcastChannel 作為雙重保障
+    if (this._channel) {
+      try {
+        console.log('[DEBUG_CHANNEL_SEND]', msg);
+        this._channel.postMessage(typeof msg === 'string' ? msg : JSON.stringify(envelope));
+      } catch (err) {
+        console.error('[Broadcast Post Error]', err);
+      }
+    }
+  }
+
+  _bindStorageListener() {
+    if (typeof window === 'undefined') return;
+    this._unbindStorageListener();
+
+    const cleanRoomId = String(this.roomId || '').replace(/[^a-zA-Z0-9]/g, '');
+    const targetKey = `rr_bus_${cleanRoomId}`;
+
+    this._storageHandler = (e) => {
+      if (!e || e.key !== targetKey || !e.newValue) return;
+      try {
+        const packet = JSON.parse(e.newValue);
+        // 忽略自己發出的訊息
+        if (packet._senderId === this.userId) return;
+        this._handleIncomingMessage(packet);
+      } catch (err) {
+        console.error('[Storage Bus Parse Error]', err);
+      }
+    };
+
+    window.addEventListener('storage', this._storageHandler);
+  }
+
+  _unbindStorageListener() {
+    if (typeof window !== 'undefined' && this._storageHandler) {
+      window.removeEventListener('storage', this._storageHandler);
+      this._storageHandler = null;
+    }
+  }
+
+  setRoomSnapshot(snapshot) {
+    if (typeof localStorage === 'undefined' || !this.roomId) return;
+    try {
+      const clean = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+      localStorage.setItem(`rr_room_state_${clean}`, JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn('[setRoomSnapshot Error]', e);
+    }
+  }
+
+  getRoomSnapshot(roomId = this.roomId) {
+    if (typeof localStorage === 'undefined' || !roomId) return null;
+    try {
+      const clean = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
+      const raw = localStorage.getItem(`rr_room_state_${clean}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn('[getRoomSnapshot Error]', e);
+      return null;
     }
   }
 
@@ -327,6 +403,7 @@ export class RoomManager {
 
   async leaveRoom() {
     this._stopHeartbeat();
+    this._unbindStorageListener();
     if (!this.roomId) return;
     try {
       this.send(MSG_TYPE.PLAYER_LEAVE, {
@@ -381,23 +458,42 @@ export class RoomManager {
 
   _handleIncomingMessage(msg) {
     if (!msg) return;
-    if (msg.roomId) {
-      const cleanMsgRoom = String(msg.roomId).replace(/[^a-zA-Z0-9]/g, '');
-      const cleanMyRoom = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+    const msgRoom = msg.roomId || msg._roomId;
+    if (msgRoom) {
+      const cleanMsgRoom = String(msgRoom).replace(/[^a-zA-Z0-9]/g, '');
+      const cleanMyRoom = String(this.roomId || '').replace(/[^a-zA-Z0-9]/g, '');
       if (cleanMsgRoom && cleanMyRoom && cleanMsgRoom !== cleanMyRoom) return;
     }
     const senderId =
+      msg._senderId ||
       msg.senderId ||
       msg.user?.id ||
       msg.player?.id ||
       msg.sender?.id ||
       msg.hostId ||
+      msg.payload?._senderId ||
       msg.payload?.senderId ||
       msg.payload?.user?.id ||
       msg.payload?.player?.id ||
       msg.payload?.sender?.id;
 
     if (senderId && senderId === this.userId) return;
+
+    // 防重複過濾 (防止 LocalStorage Bus 與 BroadcastChannel 雙重觸發同一訊息)
+    const packetUid = msg._time || msg.timestamp;
+    if (packetUid && senderId && msg.type) {
+      const dedupKey = `${senderId}_${packetUid}_${msg.type}`;
+      if (this._recentPackets && this._recentPackets.has(dedupKey)) {
+        return;
+      }
+      if (this._recentPackets) {
+        this._recentPackets.add(dedupKey);
+        if (this._recentPackets.size > 100) {
+          const firstKey = this._recentPackets.keys().next().value;
+          this._recentPackets.delete(firstKey);
+        }
+      }
+    }
 
     console.log(`[RoomSync] [Received ${msg.type}] from ${senderId || 'unknown'}:`, msg);
 

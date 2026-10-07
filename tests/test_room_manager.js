@@ -434,6 +434,82 @@ async function runTest() {
   await hostSpec.leaveRoom();
   await guestSpec.leaveRoom();
 
+  section('9. LocalStorage 共享狀態匯流排與快照 (Storage Event Bus)');
+  const storageStore = new Map();
+  const storageListeners = new Set();
+  globalThis.localStorage = {
+    getItem: (k) => (storageStore.has(k) ? storageStore.get(k) : null),
+    setItem: (k, v) => {
+      const oldVal = storageStore.get(k) || null;
+      storageStore.set(k, String(v));
+      // 模擬瀏覽器跨分頁 storage 事件分發
+      storageListeners.forEach((fn) => {
+        try {
+          fn({ key: k, newValue: String(v), oldValue: oldVal });
+        } catch {}
+      });
+    },
+    removeItem: (k) => storageStore.delete(k),
+    clear: () => storageStore.clear(),
+  };
+  globalThis.window = {
+    addEventListener: (type, fn) => {
+      if (type === 'storage') storageListeners.add(fn);
+    },
+    removeEventListener: (type, fn) => {
+      if (type === 'storage') storageListeners.delete(fn);
+    },
+  };
+
+  const busRoomId = 'bus_' + Date.now();
+  const hostBus = new RoomManager();
+  const guestBus = new RoomManager();
+
+  await hostBus.createRoom(busRoomId, 'HostAlice');
+
+  // 房主建立快照
+  const initialSnapshot = {
+    hostId: hostBus.userId,
+    hostName: hostBus.userName,
+    boardConfig: ['A_01', 'B_01', 'C_01', 'D_01'],
+    robotPositions: { red: { r: 3, c: 3 } },
+    useSilver: true,
+    players: [{ id: hostBus.userId, name: hostBus.userName, isHost: true }],
+  };
+  hostBus.setRoomSnapshot(initialSnapshot);
+
+  // 訪客加入前，直接讀取快照
+  const loadedSnapshot = guestBus.getRoomSnapshot(busRoomId);
+  assert(loadedSnapshot !== null, '訪客可直接從 LocalStorage 讀取房主快照');
+  assert(loadedSnapshot?.boardConfig?.[0] === 'A_01', '快照版圖配置正確');
+  assert(loadedSnapshot?.useSilver === true, '快照變體設定正確');
+
+  // 訪客加入並透過 Storage Bus 接收事件
+  let busReceivedMove = null;
+  guestBus.on(MSG_TYPE.DEMO_MOVE, (data) => {
+    busReceivedMove = data;
+  });
+
+  await guestBus.joinRoom(busRoomId, 'GuestBob');
+
+  // 房主發送廣播（雙保險模式：寫入 LocalStorage bus + BroadcastChannel）
+  hostBus.broadcast({
+    type: MSG_TYPE.DEMO_MOVE,
+    robotColor: 'blue',
+    direction: 'left',
+  });
+
+  await sleep(60);
+
+  assert(busReceivedMove !== null, '訪客透過 Storage Bus 成功接收廣播訊息');
+  assert(busReceivedMove?.robotColor === 'blue', '廣播訊息內容正確');
+
+  await hostBus.leaveRoom();
+  await guestBus.leaveRoom();
+
+  delete globalThis.window;
+  delete globalThis.localStorage;
+
   section('測試結果');
   console.log(`  通過: ${passed}  失敗: ${failed}`);
   if (failed > 0) process.exit(1);
