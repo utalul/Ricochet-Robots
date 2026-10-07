@@ -369,6 +369,71 @@ async function runTest() {
   await hostHS.leaveRoom();
   await guestHS.leaveRoom();
 
+  section('8. 規格 3: 可靠握手協議 (HELLO_JOIN -> ROOM_SYNC)');
+  const specRoomId = 'room_spec3_' + Date.now();
+  const hostSpec = new RoomManager();
+  const guestSpec = new RoomManager();
+
+  let hostReceivedJoin = null;
+  let guestReceivedSync = null;
+
+  // 房主監聽 HELLO_JOIN 並回覆 ROOM_SYNC
+  hostSpec.on(MSG_TYPE.HELLO_JOIN, (data) => {
+    const user = data.user || data.payload?.user || data.player || data.payload?.player;
+    hostReceivedJoin = user;
+    hostSpec.send(MSG_TYPE.ROOM_SYNC, {
+      type: MSG_TYPE.ROOM_SYNC,
+      hostId: hostSpec.userId,
+      players: [
+        { id: hostSpec.userId, name: hostSpec.userName, isHost: true },
+        { id: user.id, name: user.name, isHost: false },
+      ],
+      boardConfig: ['A_01', 'B_02', 'C_03', 'D_01'],
+      robotPositions: { red: { r: 5, c: 5 }, blue: { r: 6, c: 6 }, silver: { r: 7, c: 7 } },
+      useSilver: true,
+    });
+  });
+
+  // 訪客監聽 ROOM_SYNC
+  guestSpec.on(MSG_TYPE.ROOM_SYNC, (data) => {
+    guestReceivedSync = data;
+  });
+
+  await hostSpec.createRoom(specRoomId, 'HostAlice');
+  await guestSpec.joinRoom(specRoomId, 'GuestBob');
+
+  // 訪客模擬 500ms 重發加入廣播
+  guestSpec.send(MSG_TYPE.HELLO_JOIN, {
+    type: 'HELLO_JOIN',
+    user: { id: guestSpec.userId, name: guestSpec.userName },
+  });
+
+  await sleep(100);
+
+  assert(hostReceivedJoin !== null, '房主成功收到訪客之 HELLO_JOIN 握手廣播');
+  assert(hostReceivedJoin?.name === 'GuestBob', 'HELLO_JOIN 攜帶之 user.name 正確為 GuestBob');
+  assert(guestReceivedSync !== null, '訪客成功收到房主之 ROOM_SYNC 完整狀態回應');
+  assert(
+    guestReceivedSync?.payload?.players?.length === 2,
+    'ROOM_SYNC 包含 2 位在線玩家名單'
+  );
+  assert(
+    Array.isArray(guestReceivedSync?.payload?.boardConfig) &&
+      guestReceivedSync?.payload?.boardConfig?.length === 4,
+    'ROOM_SYNC 包含完整的 4 張子版圖 boardConfig'
+  );
+  assert(
+    guestReceivedSync?.payload?.robotPositions?.silver?.r === 7,
+    'ROOM_SYNC 包含正確的 robotPositions'
+  );
+  assert(
+    guestReceivedSync?.payload?.useSilver === true,
+    'ROOM_SYNC 包含正確的 useSilver 變體設定'
+  );
+
+  await hostSpec.leaveRoom();
+  await guestSpec.leaveRoom();
+
   section('測試結果');
   console.log(`  通過: ${passed}  失敗: ${failed}`);
   if (failed > 0) process.exit(1);

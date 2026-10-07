@@ -19,6 +19,7 @@ export const MSG_TYPE = Object.freeze({
   ROOM_SYNC_PAYLOAD: 'ROOM_SYNC_PAYLOAD', // 房主回傳完整地圖與成員狀態
   ROOM_SYNC_ACK: 'ROOM_SYNC_ACK',         // 訪客收到同步後回傳 ACK
   HELLO_JOIN: 'HELLO_JOIN',               // 新玩家主動送出加入廣播
+  ROOM_SYNC: 'ROOM_SYNC',                 // 規格 3: 房主回應房間同步資訊
   SYNC_STATE: 'SYNC_STATE',               // 房主回送全狀態同步 (地圖配置、機器人起點、變體開關、玩家名單)
   PRESENCE_PING: 'PRESENCE_PING',         // 在線心跳 Ping (每 2 秒一次維護在線玩家名單)
   PLAYER_JOIN: 'PLAYER_JOIN',
@@ -157,6 +158,14 @@ export class RoomManager {
     return this._connect(roomId, userName);
   }
 
+  /**
+   * 連線至房間（可指定是否為房主）。
+   */
+  async connect(roomId, userName, isHost = false) {
+    this.isHost = Boolean(isHost);
+    return this._connect(roomId, userName);
+  }
+
   async _connect(roomId, userName) {
     await this.leaveRoom();
 
@@ -180,6 +189,10 @@ export class RoomManager {
 
     // 廣播加入通知 (HELLO_JOIN 與 PLAYER_JOIN 雙發確保相容)
     this.send(MSG_TYPE.HELLO_JOIN, {
+      user: {
+        id: this.userId,
+        name: this.userName,
+      },
       player: {
         id: this.userId,
         name: this.userName,
@@ -215,7 +228,8 @@ export class RoomManager {
 
   _initBroadcastChannel() {
     this.mode = NETWORK_MODE.BROADCAST_CHANNEL;
-    const channelName = `ricochet_robots_channel_${String(this.roomId).trim()}`;
+    const cleanRoomId = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+    const channelName = `rr_room_${cleanRoomId}`;
     if (this._channel) {
       try {
         if (typeof this._channel.close === 'function') this._channel.close();
@@ -227,6 +241,7 @@ export class RoomManager {
     this._channel = new BroadcastChannel(channelName);
 
     const onMessage = (event) => {
+      console.log('[DEBUG_CHANNEL_RECV]', event.data);
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         console.log('[Broadcast Received]', data);
@@ -246,7 +261,8 @@ export class RoomManager {
   broadcast(msg) {
     if (!this._channel) return;
     try {
-      this._channel.postMessage(JSON.stringify(msg));
+      console.log('[DEBUG_CHANNEL_SEND]', msg);
+      this._channel.postMessage(typeof msg === 'string' ? msg : JSON.stringify(msg));
     } catch (err) {
       console.error('[Broadcast Post Error]', err);
     }
@@ -365,18 +381,45 @@ export class RoomManager {
 
   _handleIncomingMessage(msg) {
     if (!msg) return;
-    if (msg.roomId && String(msg.roomId).trim() !== String(this.roomId).trim()) return;
-    const senderId = msg.senderId || msg.sender?.id || msg.hostId || msg.payload?.sender?.id;
+    if (msg.roomId) {
+      const cleanMsgRoom = String(msg.roomId).replace(/[^a-zA-Z0-9]/g, '');
+      const cleanMyRoom = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+      if (cleanMsgRoom && cleanMyRoom && cleanMsgRoom !== cleanMyRoom) return;
+    }
+    const senderId =
+      msg.senderId ||
+      msg.user?.id ||
+      msg.player?.id ||
+      msg.sender?.id ||
+      msg.hostId ||
+      msg.payload?.senderId ||
+      msg.payload?.user?.id ||
+      msg.payload?.player?.id ||
+      msg.payload?.sender?.id;
+
     if (senderId && senderId === this.userId) return;
 
     console.log(`[RoomSync] [Received ${msg.type}] from ${senderId || 'unknown'}:`, msg);
 
+    const senderName =
+      msg.senderName ||
+      msg.user?.name ||
+      msg.player?.name ||
+      msg.sender?.name ||
+      msg.payload?.senderName ||
+      msg.payload?.user?.name ||
+      msg.payload?.player?.name ||
+      msg.payload?.sender?.name ||
+      '';
+
     const emitted = {
       type: msg.type,
       senderId: senderId || '',
-      senderName: msg.senderName || msg.sender?.name || msg.payload?.sender?.name || '',
+      senderName,
       timestamp: msg.timestamp || Date.now(),
       payload: msg.payload || msg,
+      user: msg.user || msg.payload?.user,
+      player: msg.player || msg.payload?.player,
       ...msg,
     };
 

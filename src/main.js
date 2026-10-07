@@ -648,8 +648,9 @@ function assembleDefaultBoard() {
 /** 自網址 Hash 解析邀請房號 (如 #room=1234) */
 function parseRoomFromHash() {
   if (typeof window === 'undefined') return null;
-  const match = window.location.hash.match(/room=([a-zA-Z0-9_-]+)/);
-  return match && match[1] ? match[1] : null;
+  const hash = window.location.hash || '';
+  const match = hash.match(/room=([a-zA-Z0-9_-]+)/i);
+  return match && match[1] ? match[1].replace(/[^a-zA-Z0-9]/g, '') : null;
 }
 
 /** 重新隨機洗牌組地圖 (M) */
@@ -685,58 +686,98 @@ function handleNewGame() {
 // ---------- 多人連線網路事件處理 ----------
 
 let syncRetryTimer = null;
+let syncRetryCount = 0;
 
 function stopSyncRetry() {
   if (syncRetryTimer) {
     clearInterval(syncRetryTimer);
     syncRetryTimer = null;
-    console.log('[RoomSync] Stopped REQUEST_ROOM_SYNC retry timer');
+    console.log('[RoomSync] Stopped HELLO_JOIN retry timer');
   }
+  syncRetryCount = 0;
 }
 
 function startSyncRetry() {
   stopSyncRetry();
-  const sendReq = () => {
+  syncRetryCount = 0;
+
+  const sendJoin = () => {
     if (!mpHUD?.inRoom || roomManager.isHost) {
       stopSyncRetry();
       return;
     }
-    console.log(`[RoomSync] Guest broadcasting REQUEST_ROOM_SYNC to host (Room: ${roomManager.roomId})...`);
+    syncRetryCount++;
+    if (syncRetryCount > 5) {
+      console.warn('[RoomSync] HELLO_JOIN retry reached maximum limit (5 attempts), stopping retry.');
+      stopSyncRetry();
+      return;
+    }
+
+    console.log(
+      `[RoomSync] Guest broadcasting HELLO_JOIN to host (Attempt ${syncRetryCount}/5, Room: ${roomManager.roomId})...`
+    );
+
+    const joinPayload = {
+      type: MSG_TYPE.HELLO_JOIN,
+      user: { id: roomManager.userId, name: roomManager.userName },
+      player: { id: roomManager.userId, name: roomManager.userName, isHost: false },
+      sender: { id: roomManager.userId, name: roomManager.userName },
+    };
+
+    roomManager.send(MSG_TYPE.HELLO_JOIN, joinPayload);
+    // 同步發送 REQUEST_ROOM_SYNC 確保與既有測試相容
     roomManager.send(MSG_TYPE.REQUEST_ROOM_SYNC, {
       sender: { id: roomManager.userId, name: roomManager.userName },
     });
   };
 
-  setTimeout(sendReq, 50);
-  syncRetryTimer = setInterval(sendReq, 1500);
+  // 立即發送第 1 次，後續每 500ms 重發一次（最多 5 次）
+  sendJoin();
+  syncRetryTimer = setInterval(sendJoin, 500);
 }
 
 function setupMultiplayerNetwork() {
-  // 1. 訪客請求大廳狀態同步 (REQUEST_ROOM_SYNC)
-  roomManager.on(MSG_TYPE.REQUEST_ROOM_SYNC, (data) => {
+  // 1. 訪客發送 HELLO_JOIN / REQUEST_ROOM_SYNC / PLAYER_JOIN 時，房主回覆 ROOM_SYNC
+  const handleIncomingJoinOrRequest = (data) => {
     if (!roomManager.isHost) return;
-    const sender = data.sender || data.payload?.sender || { id: data.senderId, name: data.senderName };
-    if (!sender?.id || sender.id === roomManager.userId) return;
+    const payload = data.payload || data;
+    const user =
+      data.user ||
+      payload.user ||
+      data.player ||
+      payload.player ||
+      data.sender ||
+      payload.sender || {
+        id: data.senderId,
+        name: data.senderName,
+      };
 
-    console.log('[RoomSync] Host received REQUEST_ROOM_SYNC from:', sender.name, sender.id);
+    if (!user?.id || user.id === roomManager.userId) return;
+
+    console.log('[RoomSync] Host received join/sync request from:', user.name, user.id);
 
     // 將訪客加入房主名單
     roomState.addPlayer({
-      id: sender.id,
-      name: sender.name || '玩家',
+      id: user.id,
+      name: user.name || '玩家',
       isHost: false,
     });
     mpHUD.updatePlayers(roomState.getPlayerList(), true);
+    showToast(`👋 玩家【${user.name || '玩家'}】加入了房間！`, 'info', 2000);
 
     const quadIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
-    const initRobots = roomState.initialRobots || (currentGrid ? randomRobotPositions(currentGrid) : null);
+    const initRobots =
+      roomState.initialRobots ||
+      (localMultiGameState.grid ? localMultiGameState.getRobots() : null) ||
+      (currentGrid ? randomRobotPositions(currentGrid) : null);
 
-    const syncPayload = {
-      type: MSG_TYPE.ROOM_SYNC_PAYLOAD,
+    const syncInfo = {
+      type: MSG_TYPE.ROOM_SYNC,
       hostId: roomManager.userId,
-      members: roomState.getPlayerList(), // 包含房主與訪客
+      players: roomState.getPlayerList(), // 包含房主與訪客
+      members: roomState.getPlayerList(), // 相容 members
       boardConfig: quadIds,               // 4張子版圖代碼 [A_01, B_01, C_01, D_01]
-      robotPositions: initRobots,         // 4或5台機器人的精確座標
+      robotPositions: initRobots,         // 機器人座標
       useSilver: Boolean(roomState.useSilver),
       target: roomState.target,
       round: roomState.round,
@@ -744,10 +785,16 @@ function setupMultiplayerNetwork() {
       snapshot: roomState.serialize(),
     };
 
-    console.log('[RoomSync] Host broadcasting ROOM_SYNC_PAYLOAD:', syncPayload);
-    roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, syncPayload);
-    roomManager.sendSyncState(sender.id, syncPayload);
-  });
+    console.log('[RoomSync] Host broadcasting ROOM_SYNC:', syncInfo);
+    roomManager.send(MSG_TYPE.ROOM_SYNC, syncInfo);
+    roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, syncInfo);
+    roomManager.sendSyncState(user.id, syncInfo);
+  };
+
+  roomManager.on(MSG_TYPE.HELLO_JOIN, handleIncomingJoinOrRequest);
+  roomManager.on(MSG_TYPE.REQUEST_ROOM_SYNC, handleIncomingJoinOrRequest);
+  roomManager.on(MSG_TYPE.PLAYER_JOIN, handleIncomingJoinOrRequest);
+  roomManager.on(MSG_TYPE.SYNC_REQUEST, handleIncomingJoinOrRequest);
 
   // 2. 訪客回傳同步確認 (ROOM_SYNC_ACK)
   roomManager.on(MSG_TYPE.ROOM_SYNC_ACK, (data) => {
@@ -765,65 +812,13 @@ function setupMultiplayerNetwork() {
     }
   });
 
-  // 3. 玩家加入 (HELLO_JOIN 與 PLAYER_JOIN)
-  const handlePlayerJoinMsg = ({ payload }) => {
-    if (!payload?.player) return;
-    const player = payload.player;
-    roomState.addPlayer(player);
-    mpHUD.updatePlayers(roomState.getPlayerList(), roomManager.isHost);
-    showToast(`👋 玩家【${player.name}】加入了房間！`, 'info', 2000);
-
-    // 房主發送全狀態同步
-    if (roomManager.isHost) {
-      const quadIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
-      const initRobots = roomState.initialRobots || (currentGrid ? randomRobotPositions(currentGrid) : null);
-      const syncPayload = {
-        hostId: roomManager.userId,
-        members: roomState.getPlayerList(),
-        boardConfig: quadIds,
-        robotPositions: initRobots,
-        useSilver: Boolean(roomState.useSilver),
-        target: roomState.target,
-        round: roomState.round,
-        phase: roomState.phase,
-        snapshot: roomState.serialize(),
-      };
-      roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, syncPayload);
-      roomManager.sendSyncState(player.id, syncPayload);
-    }
-  };
-
-  roomManager.on(MSG_TYPE.HELLO_JOIN, handlePlayerJoinMsg);
-  roomManager.on(MSG_TYPE.PLAYER_JOIN, handlePlayerJoinMsg);
-
-  // 4. 玩家離開
+  // 3. 玩家離開
   roomManager.on(MSG_TYPE.PLAYER_LEAVE, ({ payload }) => {
     const p = roomState.getPlayer(payload.playerId);
     const pName = p ? p.name : '玩家';
     roomState.removePlayer(payload.playerId);
     mpHUD.updatePlayers(roomState.getPlayerList(), roomManager.isHost);
     showToast(`🚪 玩家【${pName}】離開了房間`, 'info', 2000);
-  });
-
-  // 5. 狀態請求與同步 (SYNC_REQUEST)
-  roomManager.on(MSG_TYPE.SYNC_REQUEST, ({ payload }) => {
-    if (roomManager.isHost) {
-      const quadIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
-      const initRobots = roomState.initialRobots || (currentGrid ? randomRobotPositions(currentGrid) : null);
-      const syncPayload = {
-        hostId: roomManager.userId,
-        members: roomState.getPlayerList(),
-        boardConfig: quadIds,
-        robotPositions: initRobots,
-        useSilver: Boolean(roomState.useSilver),
-        target: roomState.target,
-        round: roomState.round,
-        phase: roomState.phase,
-        snapshot: roomState.serialize(),
-      };
-      roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, syncPayload);
-      roomManager.sendSyncState(payload.requesterId, syncPayload);
-    }
   });
 
   // 6. 收到全狀態同步 (ROOM_SYNC_PAYLOAD, SYNC_STATE, SYNC_RESPONSE)
@@ -957,6 +952,7 @@ function setupMultiplayerNetwork() {
     showToast('已與房主完全同步地圖、機器人與玩家名單！', 'success', 2000);
   };
 
+  roomManager.on(MSG_TYPE.ROOM_SYNC, handleSyncStateMsg);
   roomManager.on(MSG_TYPE.ROOM_SYNC_PAYLOAD, handleSyncStateMsg);
   roomManager.on(MSG_TYPE.SYNC_STATE, handleSyncStateMsg);
   roomManager.on(MSG_TYPE.SYNC_RESPONSE, handleSyncStateMsg);
@@ -979,9 +975,14 @@ function setupMultiplayerNetwork() {
 
       if (roomManager.isHost) {
         const quadIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
-        const initRobots = roomState.initialRobots || (currentGrid ? randomRobotPositions(currentGrid) : null);
-        roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, {
+        const initRobots =
+          roomState.initialRobots ||
+          (localMultiGameState.grid ? localMultiGameState.getRobots() : null) ||
+          (currentGrid ? randomRobotPositions(currentGrid) : null);
+        const syncInfo = {
+          type: MSG_TYPE.ROOM_SYNC,
           hostId: roomManager.userId,
+          players: roomState.getPlayerList(),
           members: roomState.getPlayerList(),
           boardConfig: quadIds,
           robotPositions: initRobots,
@@ -990,7 +991,9 @@ function setupMultiplayerNetwork() {
           round: roomState.round,
           phase: roomState.phase,
           snapshot: roomState.serialize(),
-        });
+        };
+        roomManager.send(MSG_TYPE.ROOM_SYNC, syncInfo);
+        roomManager.send(MSG_TYPE.ROOM_SYNC_PAYLOAD, syncInfo);
       }
     }
   });
@@ -1423,10 +1426,12 @@ function handleRestartGame() {
 }
 
 async function joinMultiplayerRoom(roomId, userName) {
+  const cleanRoomId = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
+  if (!cleanRoomId) return;
   switchGameMode('multi');
   try {
-    const info = await roomManager.joinRoom(roomId, userName);
-    const actualRoomId = info.roomId || roomId;
+    const info = await roomManager.joinRoom(cleanRoomId, userName);
+    const actualRoomId = info.roomId || cleanRoomId;
     info.roomId = actualRoomId;
     roomState.roomId = actualRoomId;
     roomState.phase = ROOM_PHASE.LOBBY;
@@ -1457,7 +1462,7 @@ async function joinMultiplayerRoom(roomId, userName) {
       elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
     }
 
-    // 啟動 50ms 延遲 + 1.5s 週期握手重試
+    // 啟動 500ms 重發 HELLO_JOIN 握手協議 (最多 5 次)
     startSyncRetry();
 
     showToast(`成功加入房間【${actualRoomId}】！正在向房主請求同步地圖…`, 'success');
@@ -1497,8 +1502,9 @@ async function init() {
           stopSyncRetry();
           switchGameMode('multi');
           try {
-            const info = await roomManager.createRoom(roomId, userName);
-            const actualRoomId = info.roomId || roomId;
+            const cleanRoomId = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
+            const info = await roomManager.createRoom(cleanRoomId, userName);
+            const actualRoomId = info.roomId || cleanRoomId;
             info.roomId = actualRoomId;
             roomState.roomId = actualRoomId;
             roomState.phase = ROOM_PHASE.LOBBY;
@@ -1643,15 +1649,37 @@ async function init() {
     // 4. 再執行模式切換與 UI 掛載
     const inviteRoomId = parseRoomFromHash();
     if (inviteRoomId) {
-      const savedName =
-        (typeof localStorage !== 'undefined' && localStorage.getItem('ricochet_player_name')) ||
-        '玩家_' + Math.floor(100 + Math.random() * 900);
-      if (mpHUD.inputName) mpHUD.inputName.value = savedName;
+      let guestName = '玩家_' + Math.floor(100 + Math.random() * 900);
+      const saved =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('ricochet_player_name')) || null;
+      if (saved && !saved.startsWith('玩家_')) {
+        guestName = saved + '_2';
+      }
+      if (mpHUD.inputName) mpHUD.inputName.value = guestName;
       if (mpHUD.inputRoom) mpHUD.inputRoom.value = inviteRoomId;
-      await joinMultiplayerRoom(inviteRoomId, savedName);
+      await joinMultiplayerRoom(inviteRoomId, guestName);
     } else {
       switchGameMode('solo');
     }
+
+    // 5. 監聽網址 Hash 變動（例如使用者在已開啟的分頁貼上 #room=xxxx）
+    window.addEventListener('hashchange', async () => {
+      if (roomManager.isHost) return;
+      const inviteId = parseRoomFromHash();
+      if (inviteId) {
+        if (
+          roomManager.roomId &&
+          String(roomManager.roomId).replace(/[^a-zA-Z0-9]/g, '') === inviteId
+        ) {
+          return;
+        }
+        const name =
+          mpHUD?.inputName?.value?.trim() ||
+          '玩家_' + Math.floor(100 + Math.random() * 900);
+        if (mpHUD?.inputRoom) mpHUD.inputRoom.value = inviteId;
+        await joinMultiplayerRoom(inviteId, name);
+      }
+    });
   } catch (err) {
     console.error('[Init Failed]', err);
     if (elTargetText) {

@@ -356,7 +356,11 @@ export class MultiplayerHUD {
         alert('請輸入房間代碼');
         return;
       }
-      this._call('joinRoom', { roomId, userName: name });
+      const cleanRoomId = roomId.replace(/[^a-zA-Z0-9]/g, '');
+      if (typeof window !== 'undefined') {
+        window.location.hash = `room=${cleanRoomId}`;
+      }
+      this._call('joinRoom', { roomId: cleanRoomId, userName: name });
     });
 
     // 複製邀請連結 (頂部按鈕與大廳卡片按鈕)
@@ -470,9 +474,10 @@ export class MultiplayerHUD {
     if (typeof window === 'undefined') return null;
     const match = window.location.hash.match(/room=([a-zA-Z0-9_-]+)/);
     if (match && match[1]) {
-      this.inputRoom.value = match[1];
+      const clean = match[1].replace(/[^a-zA-Z0-9]/g, '');
+      this.inputRoom.value = clean;
       this._call('switchToMulti');
-      return match[1];
+      return clean;
     }
     return null;
   }
