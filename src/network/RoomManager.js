@@ -326,6 +326,7 @@ export class RoomManager {
     if (typeof localStorage === 'undefined' || !this.roomId) return;
     try {
       const clean = String(this.roomId).replace(/[^a-zA-Z0-9]/g, '');
+      localStorage.setItem(`rr_snapshot_${clean}`, JSON.stringify(snapshot));
       localStorage.setItem(`rr_room_state_${clean}`, JSON.stringify(snapshot));
     } catch (e) {
       console.warn('[setRoomSnapshot Error]', e);
@@ -336,7 +337,9 @@ export class RoomManager {
     if (typeof localStorage === 'undefined' || !roomId) return null;
     try {
       const clean = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
-      const raw = localStorage.getItem(`rr_room_state_${clean}`);
+      const raw =
+        localStorage.getItem(`rr_snapshot_${clean}`) ||
+        localStorage.getItem(`rr_room_state_${clean}`);
       return raw ? JSON.parse(raw) : null;
     } catch (e) {
       console.warn('[getRoomSnapshot Error]', e);

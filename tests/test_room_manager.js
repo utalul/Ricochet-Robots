@@ -484,6 +484,16 @@ async function runTest() {
   assert(loadedSnapshot?.boardConfig?.[0] === 'A_01', '快照版圖配置正確');
   assert(loadedSnapshot?.useSilver === true, '快照變體設定正確');
 
+  // 驗證 rr_snapshot_ 鍵名
+  const cleanId = String(busRoomId).replace(/[^a-zA-Z0-9]/g, '');
+  const rawSnap = globalThis.localStorage.getItem(`rr_snapshot_${cleanId}`);
+  assert(rawSnap !== null, 'LocalStorage 存在 rr_snapshot_ 鍵名快照');
+  const parsedSnap = JSON.parse(rawSnap);
+  parsedSnap.players.push({ id: guestBus.userId, name: 'GuestBob', isHost: false, score: 0 });
+  globalThis.localStorage.setItem(`rr_snapshot_${cleanId}`, JSON.stringify(parsedSnap));
+  const reRead = JSON.parse(globalThis.localStorage.getItem(`rr_snapshot_${cleanId}`));
+  assert(reRead.players.length === 2, 'LocalStorage 快照成功更新為 2 位玩家');
+
   // 訪客加入並透過 Storage Bus 接收事件
   let busReceivedMove = null;
   guestBus.on(MSG_TYPE.DEMO_MOVE, (data) => {
