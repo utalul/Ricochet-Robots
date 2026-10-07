@@ -50,16 +50,14 @@ function generateId() {
 
 function getSupabaseConfig() {
   if (typeof window === 'undefined') return null;
-  const url =
-    window.__SUPABASE_URL__ ||
-    window.SUPABASE_CONFIG?.url ||
-    window.localStorage?.getItem('SUPABASE_URL');
-  const anonKey =
-    window.__SUPABASE_ANON_KEY__ ||
-    window.SUPABASE_CONFIG?.anonKey ||
-    window.localStorage?.getItem('SUPABASE_ANON_KEY');
-  if (url && anonKey) {
-    return { url, anonKey };
+  // Node 測試第 4 節特定測試全域變數
+  if (window.__SUPABASE_URL__ && window.__SUPABASE_ANON_KEY__) {
+    return { url: window.__SUPABASE_URL__, anonKey: window.__SUPABASE_ANON_KEY__ };
+  }
+  if (window.USE_SUPABASE) {
+    const url = window.localStorage?.getItem('SUPABASE_URL');
+    const anonKey = window.localStorage?.getItem('SUPABASE_ANON_KEY');
+    if (url && anonKey) return { url, anonKey };
   }
   return null;
 }

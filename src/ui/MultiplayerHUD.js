@@ -145,7 +145,7 @@ export class MultiplayerHUD {
           <div class="room-header">
             <div>
               <span class="room-title">房間：<strong id="mp-room-title" class="room-title-code">---</strong></span>
-              <span id="mp-net-badge" class="badge">🌐 Supabase 雲端即時連線</span>
+              <span id="mp-net-badge" class="badge">⚡ 本地分頁同步</span>
               <span id="mp-variant-badge" class="badge" style="background: #455a64; color: #eceff1; display: none;">⚪ 白機器人</span>
             </div>
             <div class="room-header-btns">
@@ -342,9 +342,6 @@ export class MultiplayerHUD {
       const name = this._saveAndGetName();
       const newRoomId = String(Math.floor(1000 + Math.random() * 9000));
       this.inputRoom.value = newRoomId;
-      if (typeof window !== 'undefined') {
-        window.location.hash = `room=${newRoomId}`;
-      }
       const useSilver = Boolean(this.inputUseSilver?.checked);
       this._call('createRoom', { roomId: newRoomId, userName: name, useSilver });
     });
@@ -358,9 +355,6 @@ export class MultiplayerHUD {
         return;
       }
       const cleanRoomId = roomId.replace(/[^a-zA-Z0-9]/g, '');
-      if (typeof window !== 'undefined') {
-        window.location.hash = `room=${cleanRoomId}`;
-      }
       this._call('joinRoom', { roomId: cleanRoomId, userName: name });
     });
 
@@ -590,8 +584,7 @@ export class MultiplayerHUD {
     if (inRoom && info) {
       const code = info.roomId ? String(info.roomId) : '';
       this.setRoomCode(code);
-      this.netBadge.textContent =
-        info.mode && info.mode.includes('Supabase') ? '🌐 Supabase 雲端即時連線' : '⚡ 本地分頁廣播';
+      this.netBadge.textContent = '⚡ 本地分頁同步';
       this.setVariant(Boolean(info.useSilver));
       if (history.replaceState && code) {
         history.replaceState(null, '', `#room=${code}`);

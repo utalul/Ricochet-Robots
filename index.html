@@ -158,15 +158,6 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script type="module">
-    import { DEFAULT_SUPABASE_CONFIG } from './src/config.js';
-    window.DEFAULT_SUPABASE_CONFIG = DEFAULT_SUPABASE_CONFIG;
-    if (typeof localStorage !== 'undefined' && !localStorage.getItem('SUPABASE_URL')) {
-      localStorage.setItem('SUPABASE_URL', DEFAULT_SUPABASE_CONFIG.url);
-      localStorage.setItem('SUPABASE_ANON_KEY', DEFAULT_SUPABASE_CONFIG.anonKey);
-    }
-  </script>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

@@ -766,117 +766,155 @@ function loadRobotsFromPositions(robotPositions) {
 }
 
 let hostPollingTimer = null;
-let guestWatcherTimer = null;
+let guestPollingTimer = null;
 
-function stopHostSnapshotPolling() {
+function stopHostPolling() {
   if (hostPollingTimer) {
     clearInterval(hostPollingTimer);
     hostPollingTimer = null;
-    console.log('[Host Poll] Stopped snapshot polling timer');
+    console.log('[Host Polling] Stopped 500ms polling');
   }
 }
 
-function startHostSnapshotPolling(roomId) {
-  stopHostSnapshotPolling();
+function stopGuestPolling() {
+  if (guestPollingTimer) {
+    clearInterval(guestPollingTimer);
+    guestPollingTimer = null;
+    console.log('[Guest Polling] Stopped 500ms polling');
+  }
+}
+
+// 相容舊函式命名
+const stopHostSnapshotPolling = stopHostPolling;
+const stopGuestSnapshotWatcher = stopGuestPolling;
+
+function startHostPolling(roomId) {
+  stopHostPolling();
   if (typeof setInterval === 'undefined' || !roomId) return;
   const cleanRoomId = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
-  console.log('[Host Poll] Started 1s snapshot polling for room:', cleanRoomId);
+  console.log('[Host Polling] Started 500ms polling for room:', cleanRoomId);
 
   hostPollingTimer = setInterval(() => {
     if (!roomManager.isHost || !roomManager.roomId) {
-      stopHostSnapshotPolling();
+      stopHostPolling();
       return;
     }
     if (typeof localStorage === 'undefined') return;
     try {
       const raw =
-        localStorage.getItem(`rr_snapshot_${cleanRoomId}`) ||
-        localStorage.getItem(`rr_room_state_${cleanRoomId}`);
+        localStorage.getItem(`RR_ROOM_${cleanRoomId}`) ||
+        localStorage.getItem(`rr_snapshot_${cleanRoomId}`);
       if (!raw) return;
-      const snapshot = JSON.parse(raw);
-      if (Array.isArray(snapshot.players)) {
-        const curList = roomState.getPlayerList();
-        let changed = snapshot.players.length !== curList.length;
-        if (!changed) {
-          const curIds = new Set(curList.map((p) => p.id));
-          if (snapshot.players.some((p) => !curIds.has(p.id))) {
-            changed = true;
-          }
-        }
-        if (changed) {
-          console.log('[Host Poll] Detected players change in snapshot:', snapshot.players);
-          roomState.players.clear();
-          snapshot.players.forEach((p) => roomState.addPlayer(p));
-          mpHUD.updatePlayers(snapshot.players, true);
-        }
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.players)) {
+        roomState.players.clear();
+        data.players.forEach((p) => roomState.addPlayer(p));
+        mpHUD.updatePlayers(data.players, true);
       }
     } catch (err) {
-      console.warn('[Host Poll Error]', err);
+      console.warn('[Host Polling Error]', err);
     }
-  }, 1000);
+  }, 500);
 }
 
-function stopGuestSnapshotWatcher() {
-  if (guestWatcherTimer) {
-    clearInterval(guestWatcherTimer);
-    guestWatcherTimer = null;
-  }
-}
-
-function startGuestSnapshotWatcher(roomId, myId, myName) {
-  stopGuestSnapshotWatcher();
+function startGuestPolling(roomId) {
+  stopGuestPolling();
   if (typeof setInterval === 'undefined' || !roomId) return;
   const cleanRoomId = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
-  let checks = 0;
-  guestWatcherTimer = setInterval(() => {
-    checks++;
-    if (checks > 25 || roomManager.isHost || !mpHUD?.inRoom) {
-      stopGuestSnapshotWatcher();
+  console.log('[Guest Polling] Started 500ms polling for room:', cleanRoomId);
+
+  guestPollingTimer = setInterval(() => {
+    if (roomManager.isHost || !roomManager.roomId || !mpHUD?.inRoom) {
+      stopGuestPolling();
       return;
     }
     if (typeof localStorage === 'undefined') return;
     try {
       const raw =
-        localStorage.getItem(`rr_snapshot_${cleanRoomId}`) ||
-        localStorage.getItem(`rr_room_state_${cleanRoomId}`);
+        localStorage.getItem(`RR_ROOM_${cleanRoomId}`) ||
+        localStorage.getItem(`rr_snapshot_${cleanRoomId}`);
       if (!raw) return;
-      const snapshot = JSON.parse(raw);
-      // 若尚未載入房主版圖或版圖不一致，立刻同步
-      const hostQuadIds = snapshot.boardConfig;
-      const currentIds = currentQuadBoards ? currentQuadBoards.map((b) => b.board_id) : [];
-      const match =
-        Array.isArray(hostQuadIds) &&
-        hostQuadIds.length === 4 &&
-        currentIds.length === 4 &&
-        hostQuadIds.every((id, idx) => id === currentIds[idx]);
+      const data = JSON.parse(raw);
 
-      if (!match && Array.isArray(hostQuadIds) && hostQuadIds.length === 4) {
-        loadBoardFromConfig(hostQuadIds);
-        const useSilver = Boolean(snapshot.useSilver);
-        roomState.useSilver = useSilver;
-        updateRobotVariantUI(useSilver);
-        if (mpHUD) mpHUD.setVariant(useSilver);
-        if (snapshot.robotPositions) {
-          loadRobotsFromPositions(snapshot.robotPositions);
-        }
-      }
-      // 確保自己在 players 中
-      if (Array.isArray(snapshot.players)) {
-        let dirty = false;
-        if (!snapshot.players.some((p) => p.id === myId)) {
-          snapshot.players.push({ id: myId, name: myName, isHost: false, score: 0 });
-          dirty = true;
-          localStorage.setItem(`rr_snapshot_${cleanRoomId}`, JSON.stringify(snapshot));
-          localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(snapshot));
-        }
+      // 1. 同步玩家名單與在線人數
+      if (Array.isArray(data.players)) {
         roomState.players.clear();
-        snapshot.players.forEach((p) => roomState.addPlayer(p));
-        mpHUD.updatePlayers(snapshot.players, false);
+        data.players.forEach((p) => roomState.addPlayer(p));
+        mpHUD.updatePlayers(data.players, false);
+      }
+
+      // 2. 檢查 roomData.started
+      // 一旦 roomData.started === true，訪客端立即同步翻開第一道題目，開始 120 秒計時！
+      if (data.started) {
+        if (roomState.phase === ROOM_PHASE.LOBBY) {
+          applyRoundDataToGuest(data);
+        } else if (data.round && data.round !== roomState.round) {
+          applyRoundDataToGuest(data);
+        }
       }
     } catch (err) {
-      console.warn('[Guest Watcher Error]', err);
+      console.warn('[Guest Polling Error]', err);
     }
-  }, 400);
+  }, 500);
+}
+
+// 相容舊函式命名
+const startHostSnapshotPolling = startHostPolling;
+function startGuestSnapshotWatcher(roomId) {
+  startGuestPolling(roomId);
+}
+
+/** 訪客端同步套用題目、機器人與 120 秒倒數計時 */
+function applyRoundDataToGuest(data) {
+  if (!data || !data.target) return;
+  const target = data.target;
+  const round = data.round || 1;
+  const duration = data.countdownDuration || 120;
+  const useSilver = Boolean(data.useSilver);
+
+  // 機器人起點
+  const robots = data.initialRobots || data.robotPositions || roomState.initialRobots;
+  if (robots) {
+    roomState.initialRobots = cloneRobots(robots);
+  }
+
+  roomState.startRound({
+    grid: currentGrid,
+    initialRobots: roomState.initialRobots,
+    target,
+    round,
+    duration,
+    useSilver,
+    phase: ROOM_PHASE.RACING,
+  });
+
+  localMultiGameState.initRound(currentGrid, roomState.initialRobots, target);
+  localPbMoves = null;
+
+  renderer.setTarget(target);
+  renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
+
+  if (elTargetIcon) {
+    elTargetIcon.innerHTML = '';
+    elTargetIcon.appendChild(createTargetIcon(target, 40));
+  }
+  if (elTargetText) {
+    elTargetText.innerHTML = getTargetDescription(target);
+  }
+
+  hideSoloModal();
+  hideRoundModal();
+
+  mpHUD.setPersonalBest(null);
+  mpHUD.updateLeaderboard([]);
+  mpHUD.updateTargetProgress(round, roomState.completedTargets.length, 17);
+  mpHUD.updatePhase(ROOM_PHASE.RACING, {
+    countdownEnd: data.countdownEnd || (Date.now() + duration * 1000),
+    countdownDuration: duration,
+  });
+
+  updateHUD();
+  showToast(`🔔 房主已啟動遊戲！第 ${round} 題 2 分鐘同步競速倒數！`, 'info', 3200);
 }
 
 /** 更新房間快照至 LocalStorage (同瀏覽器跨分頁 100% 共享狀態) */
@@ -898,9 +936,11 @@ function updateRoomSnapshot(extra = {}) {
       target: roomState.target || null,
       countdownEnd: roomState.countdownEnd || null,
       countdownDuration: roomState.countdownDuration || 120,
+      started: roomState.phase === ROOM_PHASE.RACING,
       updatedAt: Date.now(),
       ...extra,
     };
+    localStorage.setItem(`RR_ROOM_${cleanRoomId}`, JSON.stringify(snapshot));
     localStorage.setItem(`rr_snapshot_${cleanRoomId}`, JSON.stringify(snapshot));
     localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(snapshot));
     console.log('[Snapshot Saved]', snapshot);
@@ -1349,20 +1389,18 @@ function setupMultiplayerNetwork() {
       if (!roomManager.roomId) return;
       const cleanRoomId = String(roomManager.roomId).replace(/[^a-zA-Z0-9]/g, '');
       if (
-        (e.key === `rr_snapshot_${cleanRoomId}` || e.key === `rr_room_state_${cleanRoomId}`) &&
+        (e.key === `RR_ROOM_${cleanRoomId}` ||
+          e.key === `rr_snapshot_${cleanRoomId}` ||
+          e.key === `rr_room_state_${cleanRoomId}`) &&
         e.newValue
       ) {
         try {
           const snapshot = JSON.parse(e.newValue);
           if (roomManager.isHost) {
             if (Array.isArray(snapshot.players)) {
-              const curList = roomState.getPlayerList();
-              if (snapshot.players.length !== curList.length) {
-                console.log('[Storage Event] Host detected players change:', snapshot.players);
-                roomState.players.clear();
-                snapshot.players.forEach((p) => roomState.addPlayer(p));
-                mpHUD.updatePlayers(snapshot.players, true);
-              }
+              roomState.players.clear();
+              snapshot.players.forEach((p) => roomState.addPlayer(p));
+              mpHUD.updatePlayers(snapshot.players, true);
             }
           } else {
             if (Array.isArray(snapshot.players)) {
@@ -1370,7 +1408,13 @@ function setupMultiplayerNetwork() {
               snapshot.players.forEach((p) => roomState.addPlayer(p));
               mpHUD.updatePlayers(snapshot.players, false);
             }
-            if (snapshot.phase && snapshot.phase !== roomState.phase) {
+            if (snapshot.started) {
+              if (roomState.phase === ROOM_PHASE.LOBBY) {
+                applyRoundDataToGuest(snapshot);
+              } else if (snapshot.round && snapshot.round !== roomState.round) {
+                applyRoundDataToGuest(snapshot);
+              }
+            } else if (snapshot.phase && snapshot.phase !== roomState.phase) {
               roomState.phase = snapshot.phase;
               mpHUD.updatePhase(snapshot.phase);
             }
@@ -1708,6 +1752,9 @@ function handleRestartGame() {
 async function joinMultiplayerRoom(roomId, userName) {
   const cleanRoomId = String(roomId).replace(/[^a-zA-Z0-9]/g, '');
   if (!cleanRoomId) return;
+  stopHostPolling();
+  stopGuestPolling();
+  stopSyncRetry();
   switchGameMode('multi');
   try {
     if (!allBoards || allBoards.length === 0) {
@@ -1717,91 +1764,120 @@ async function joinMultiplayerRoom(roomId, userName) {
     const myId = roomManager.userId;
     const myName = (userName && userName.trim()) || roomManager.userName || '玩家';
     roomManager.userName = myName;
+    roomManager.isHost = false;
+    roomManager.roomId = cleanRoomId;
 
-    // 1. 訪客以訪客身分連線 (isHost 永遠為 false，絕不擅自成為房主)
-    const info = await roomManager.joinRoom(cleanRoomId, myName);
-    info.isHost = false;
-    roomState.roomId = cleanRoomId;
-    roomState.phase = ROOM_PHASE.LOBBY;
-
-    // 2. 嘗試讀取本地快照以供即時無延遲預覽
-    let snapshot = null;
+    // 1. 取得房號，直接讀取 const raw = localStorage.getItem('RR_ROOM_8183')
+    let raw = null;
     if (typeof localStorage !== 'undefined') {
-      const raw =
-        localStorage.getItem(`rr_snapshot_${cleanRoomId}`) ||
-        localStorage.getItem(`rr_room_state_${cleanRoomId}`);
-      if (raw) {
-        try {
-          snapshot = JSON.parse(raw);
-        } catch (err) {
-          console.warn('[Snapshot Read Parse Error]', err);
-        }
-      }
+      raw =
+        localStorage.getItem(`RR_ROOM_${cleanRoomId}`) ||
+        localStorage.getItem(`rr_snapshot_${cleanRoomId}`);
     }
 
-    if (snapshot) {
-      if (Array.isArray(snapshot.boardConfig) && snapshot.boardConfig.length === 4) {
-        loadBoardFromConfig(snapshot.boardConfig);
-      }
-      const useSilver = Boolean(snapshot.useSilver);
-      roomState.useSilver = useSilver;
-      updateRobotVariantUI(useSilver);
-      if (mpHUD) mpHUD.setVariant(useSilver);
-      if (snapshot.robotPositions) {
-        loadRobotsFromPositions(snapshot.robotPositions);
-      }
+    // 若無資料：alert('找不到該房間，請確認房主已建立！'); return;
+    if (!raw) {
+      alert('找不到該房間，請確認房主已建立！');
+      switchGameMode('solo');
+      return;
+    }
 
-      // 將自己加入快照玩家清單並回寫
-      if (!Array.isArray(snapshot.players)) snapshot.players = [];
-      const existingIdx = snapshot.players.findIndex(
-        (p) => p.id === myId || (!p.isHost && p.name === myName)
-      );
-      if (existingIdx >= 0) {
-        snapshot.players[existingIdx].id = myId;
-        snapshot.players[existingIdx].name = myName;
-      } else {
-        snapshot.players.push({ id: myId, name: myName, isHost: false, score: 0 });
-      }
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(`rr_snapshot_${cleanRoomId}`, JSON.stringify(snapshot));
-        localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(snapshot));
-      }
+    let roomData = null;
+    try {
+      roomData = JSON.parse(raw);
+    } catch (err) {
+      alert('讀取房間資料失敗');
+      switchGameMode('solo');
+      return;
+    }
 
-      roomState.players.clear();
-      snapshot.players.forEach((p) => roomState.addPlayer(p));
+    // 2. 強制使用房主資料渲染
+    // 呼叫現有的版圖拼裝函式，傳入 roomData.boardConfig 拼裝同一張地圖
+    if (Array.isArray(roomData.boardConfig) && roomData.boardConfig.length === 4) {
+      loadBoardFromConfig(roomData.boardConfig);
+    }
+    // 呼叫現有的機器人放置函式，傳入 roomData.robotPositions 放置機器人
+    if (roomData.robotPositions) {
+      loadRobotsFromPositions(roomData.robotPositions);
+    }
+
+    const useSilver = Boolean(roomData.useSilver);
+    roomState.useSilver = useSilver;
+    updateRobotVariantUI(useSilver);
+    if (mpHUD) mpHUD.setVariant(useSilver);
+
+    roomState.roomId = cleanRoomId;
+    roomState.phase = roomData.started ? ROOM_PHASE.RACING : ROOM_PHASE.LOBBY;
+
+    // 3. 將自己的 { id: guestUserId, name: guestUserName, isHost: false } 推入 roomData.players（避免重複）
+    if (!Array.isArray(roomData.players)) roomData.players = [];
+    const existingIdx = roomData.players.findIndex(
+      (p) => p.id === myId || (!p.isHost && p.name === myName)
+    );
+    if (existingIdx >= 0) {
+      roomData.players[existingIdx].id = myId;
+      roomData.players[existingIdx].name = myName;
+      roomData.players[existingIdx].isHost = false;
     } else {
-      // 尚未有本地快照，先初始化自己為房間訪客玩家
-      roomState.players.clear();
-      roomState.addPlayer({ id: myId, name: myName, isHost: false, score: 0 });
+      roomData.players.push({
+        id: myId,
+        name: myName,
+        isHost: false,
+        score: 0,
+      });
     }
 
-    // 3. 設定 HUD 狀態（訪客身分）
+    // 4. 寫回 LocalStorage
+    localStorage.setItem(`RR_ROOM_${cleanRoomId}`, JSON.stringify(roomData));
+    localStorage.setItem(`rr_snapshot_${cleanRoomId}`, JSON.stringify(roomData));
+    localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(roomData));
+
+    // 5. 訪客端按鈕強制鎖定為「⏳ 等待房主開始遊戲...」，人數顯示 (2 / 100)
+    roomState.players.clear();
+    roomData.players.forEach((p) => roomState.addPlayer(p));
+
+    const info = {
+      roomId: cleanRoomId,
+      userId: myId,
+      userName: myName,
+      isHost: false,
+      useSilver,
+      mode: '⚡ 本地分頁同步',
+    };
+
     mpHUD.setInRoom(true, info);
-    mpHUD.updatePhase(ROOM_PHASE.LOBBY);
-    mpHUD.updatePlayers(roomState.getPlayerList(), false);
-    renderer.setTarget(null);
+    mpHUD.updatePhase(roomData.started ? ROOM_PHASE.RACING : ROOM_PHASE.LOBBY);
+    mpHUD.updatePlayers(roomData.players, false);
 
-    if (elTargetIcon) {
-      elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+    if (!roomData.started) {
+      renderer.setTarget(null);
+      if (elTargetIcon) {
+        elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+      }
+      if (elTargetText) {
+        elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
+      }
+    } else {
+      applyRoundDataToGuest(roomData);
     }
-    if (elTargetText) {
-      elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
+
+    if (window.history.replaceState) {
+      window.history.replaceState(null, '', `#room=${cleanRoomId}`);
     }
 
-    startGuestSnapshotWatcher(cleanRoomId, myId, myName);
+    showToast(`成功加入房間【${cleanRoomId}】！地圖與玩家名單已同步完成 🎮`, 'success');
 
-    // 4. 廣播加入通知與狀態索取
+    // 6. 訪客端啟動 setInterval 每 500ms 檢查一次 roomData.started
+    startGuestPolling(cleanRoomId);
+
+    // 廣播加入通知
     const joinMsg = {
       player: { id: myId, name: myName, isHost: false },
       user: { id: myId, name: myName },
-      players: roomState.getPlayerList(),
+      players: roomData.players,
     };
     roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
     roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
-    roomManager.send(MSG_TYPE.REQUEST_ROOM_SYNC, { requesterId: myId });
-    startSyncRetry();
-
-    showToast(`成功加入房間【${cleanRoomId}】！等待房主開始遊戲... 🎮`, 'info');
   } catch (err) {
     console.error('加入房間失敗:', err);
     showToast('連線失敗：' + err.message, 'warn');
@@ -1870,7 +1946,7 @@ async function init() {
             renderer.setTarget(null);
             renderer.renderRobots(initRobots, selectedRobot, { animate: false });
 
-            // 房主立即寫入房間快照至 LocalStorage！
+            // 房主立即同步寫入房間快照至 LocalStorage！
             const hostSnapshot = {
               roomId: actualRoomId,
               hostId: info.userId,
@@ -1879,11 +1955,13 @@ async function init() {
               robotPositions: initRobots,
               useSilver: Boolean(roomState.useSilver),
               players: [{ id: info.userId, name: info.userName, isHost: true, score: 0 }],
+              started: false,
               phase: ROOM_PHASE.LOBBY,
               round: 0,
               updatedAt: Date.now(),
             };
             if (typeof localStorage !== 'undefined') {
+              localStorage.setItem(`RR_ROOM_${actualRoomId}`, JSON.stringify(hostSnapshot));
               localStorage.setItem(`rr_snapshot_${actualRoomId}`, JSON.stringify(hostSnapshot));
               localStorage.setItem(`rr_room_state_${actualRoomId}`, JSON.stringify(hostSnapshot));
               console.log('[Snapshot Saved]', hostSnapshot);
@@ -1896,12 +1974,16 @@ async function init() {
               elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
             }
 
+            if (window.history.replaceState) {
+              window.history.replaceState(null, '', `#room=${actualRoomId}`);
+            }
+
             mpHUD.setInRoom(true, info);
             mpHUD.setVariant(Boolean(useSilver));
             mpHUD.updatePhase(ROOM_PHASE.LOBBY);
             mpHUD.updatePlayers(roomState.getPlayerList(), true);
 
-            startHostSnapshotPolling(actualRoomId);
+            startHostPolling(actualRoomId);
             showToast(`房間【${actualRoomId}】建立成功！等待玩家加入大廳 👑`, 'success');
           } catch (err) {
             console.error('建立房間失敗:', err);
@@ -1913,18 +1995,27 @@ async function init() {
         },
         leaveRoom: async () => {
           stopSyncRetry();
-          stopHostSnapshotPolling();
-          stopGuestSnapshotWatcher();
-          if (typeof localStorage !== 'undefined' && roomManager.roomId) {
-            const clean = String(roomManager.roomId).replace(/[^a-zA-Z0-9]/g, '');
-            const raw = localStorage.getItem(`rr_snapshot_${clean}`);
-            if (raw) {
+          stopHostPolling();
+          stopGuestPolling();
+          const clean = roomManager.roomId ? String(roomManager.roomId).replace(/[^a-zA-Z0-9]/g, '') : null;
+          if (typeof localStorage !== 'undefined' && clean) {
+            if (roomManager.isHost) {
+              localStorage.removeItem(`RR_ROOM_${clean}`);
+              localStorage.removeItem(`rr_snapshot_${clean}`);
+              localStorage.removeItem(`rr_room_state_${clean}`);
+            } else {
               try {
-                const snap = JSON.parse(raw);
-                if (Array.isArray(snap.players)) {
-                  snap.players = snap.players.filter((p) => p.id !== roomManager.userId);
-                  localStorage.setItem(`rr_snapshot_${clean}`, JSON.stringify(snap));
-                  localStorage.setItem(`rr_room_state_${clean}`, JSON.stringify(snap));
+                const raw =
+                  localStorage.getItem(`RR_ROOM_${clean}`) ||
+                  localStorage.getItem(`rr_snapshot_${clean}`);
+                if (raw) {
+                  const snap = JSON.parse(raw);
+                  if (Array.isArray(snap.players)) {
+                    snap.players = snap.players.filter((p) => p.id !== roomManager.userId);
+                    localStorage.setItem(`RR_ROOM_${clean}`, JSON.stringify(snap));
+                    localStorage.setItem(`rr_snapshot_${clean}`, JSON.stringify(snap));
+                    localStorage.setItem(`rr_room_state_${clean}`, JSON.stringify(snap));
+                  }
                 }
               } catch {}
             }
