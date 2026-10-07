@@ -24,7 +24,8 @@ import { MultiplayerHUD } from './ui/MultiplayerHUD.js';
 // 全域捕獲未處理 Promise Rejection，防止程式異常中斷
 if (typeof window !== 'undefined') {
   window.addEventListener('unhandledrejection', (event) => {
-    console.error('🔥 全域捕獲未處理 Promise Rejection：', event.reason);
+    console.warn('🔥 全域捕獲未處理 Promise Rejection：', event.reason);
+    event.preventDefault();
   });
 }
 
@@ -627,14 +628,24 @@ function handleNextRound() {
 
 /** 載入版圖題庫 */
 async function loadBoardTemplates() {
-  let res = await fetch(DATA_URL).catch(() => null);
-  if (!res || !res.ok) {
-    res = await fetch(FALLBACK_DATA_URL);
+  try {
+    let res = await fetch(DATA_URL).catch(() => null);
+    if (!res || !res.ok) {
+      res = await fetch(FALLBACK_DATA_URL).catch(() => null);
+    }
+    if (!res || !res.ok) {
+      console.warn('[loadBoardTemplates] fetch failed, status:', res?.status);
+      return allBoards || [];
+    }
+    const data = await res.json().catch(() => null);
+    if (data && Array.isArray(data.boards)) {
+      allBoards = data.boards;
+    }
+    return allBoards || [];
+  } catch (err) {
+    console.warn('[loadBoardTemplates Error]:', err);
+    return allBoards || [];
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  allBoards = data.boards;
-  return allBoards;
 }
 
 /** 組合預設 16×16 大棋盤以供底層預覽與單機模式使用 */
@@ -1761,161 +1772,149 @@ function handleRestartGame() {
 }
 
 async function joinRoomWithRetry(roomId, userName) {
-  const cleanRoomId = String(roomId || '').trim().replace(/[^a-zA-Z0-9]/g, '');
-  if (!cleanRoomId) return false;
-  const storageKey = `RR_ROOM_DATA_${cleanRoomId}`;
+  const cleanId = String(roomId || '').replace(/[^a-zA-Z0-9]/g, '');
+  if (!cleanId) return false;
+  const storageKey = `RR_ROOM_DATA_${cleanId}`;
 
   stopHostPolling();
   stopGuestPolling();
   stopSyncRetry();
   switchGameMode('multi');
-  try {
-    if (!allBoards || allBoards.length === 0) {
-      await loadBoardTemplates();
-    }
 
-    let roomData = null;
-    for (let i = 0; i < 5; i++) {
-      let raw = null;
-      if (typeof localStorage !== 'undefined') {
-        raw =
-          localStorage.getItem(storageKey) ||
-          localStorage.getItem(`RR_ROOM_${cleanRoomId}`) ||
-          localStorage.getItem(`rr_snapshot_${cleanRoomId}`) ||
-          localStorage.getItem(`rr_room_state_${cleanRoomId}`);
-      }
-      if (raw) {
-        try {
-          roomData = JSON.parse(raw);
-          if (roomData && roomData.boardConfig && Array.isArray(roomData.boardConfig) && roomData.boardConfig.length === 4) {
-            console.log(`[joinRoomWithRetry] 成功於第 ${i + 1} 次讀取到房間資料:`, roomData);
-            break;
-          }
-        } catch (e) {
-          console.warn(`[joinRoomWithRetry] 快照解析重試 (${i + 1}/5):`, e);
+  // 1. 先讀 LocalStorage 快照（完全不依賴任何網路連線，嚴禁前置 await 網路）
+  let roomData = null;
+  for (let i = 0; i < 5; i++) {
+    const raw =
+      (typeof localStorage !== 'undefined' &&
+        (localStorage.getItem(storageKey) ||
+          localStorage.getItem(`RR_ROOM_${cleanId}`) ||
+          localStorage.getItem(`rr_snapshot_${cleanId}`) ||
+          localStorage.getItem(`rr_room_state_${cleanId}`))) ||
+      null;
+    if (raw) {
+      try {
+        roomData = JSON.parse(raw);
+        if (
+          roomData &&
+          roomData.boardConfig &&
+          Array.isArray(roomData.boardConfig) &&
+          roomData.boardConfig.length === 4
+        ) {
+          console.log(`[joinRoomWithRetry] 成功於第 ${i + 1} 次讀取到房間資料:`, roomData);
+          break;
         }
-      }
-      if (i < 4) {
-        await new Promise((r) => setTimeout(r, 300));
-      }
+      } catch (e) {}
     }
+    await new Promise((r) => setTimeout(r, 200));
+  }
 
-    if (!roomData) {
-      const keys = typeof localStorage !== 'undefined' ? Object.keys(localStorage) : [];
-      console.error('❌ 找不到房間快照，目前 LocalStorage Keys：', keys);
-      alert(`找不到房間 ${cleanRoomId}，請確認房主已建立！`);
-      if (!currentGrid) {
-        assembleDefaultBoard();
-      }
-      switchGameMode('solo');
-      return false;
+  if (!roomData) {
+    const keys = typeof localStorage !== 'undefined' ? Object.keys(localStorage) : [];
+    console.error('訪客讀取失敗，當前 Keys:', keys);
+    alert(`找不到房間 ${cleanId}，請確認房主已建立！`);
+    if (!currentGrid) {
+      assembleDefaultBoard();
     }
-
-    const myUserId = roomManager.userId;
-    const myUserName = (userName && userName.trim()) || roomManager.userName || '玩家';
-    roomManager.userName = myUserName;
-    roomManager.isHost = false;
-    roomManager.roomId = cleanRoomId;
-
-    // 讀取成功：同步地圖與機器人位置
-    loadBoardFromConfig(roomData.boardConfig);
-    if (roomData.robotPositions) {
-      loadRobotsFromPositions(roomData.robotPositions);
-    }
-
-    const useSilver = Boolean(roomData.useSilver);
-    roomState.useSilver = useSilver;
-    updateRobotVariantUI(useSilver);
-    if (mpHUD) mpHUD.setVariant(useSilver);
-
-    roomState.roomId = cleanRoomId;
-    roomState.phase = roomData.started ? ROOM_PHASE.RACING : ROOM_PHASE.LOBBY;
-
-    // 更新名單並寫回
-    if (!Array.isArray(roomData.players)) roomData.players = [];
-    const existingIdx = roomData.players.findIndex(
-      (p) => p.id === myUserId || (!p.isHost && p.name === myUserName)
-    );
-    if (existingIdx >= 0) {
-      roomData.players[existingIdx].id = myUserId;
-      roomData.players[existingIdx].name = myUserName;
-      roomData.players[existingIdx].isHost = false;
-    } else {
-      roomData.players.push({
-        id: myUserId,
-        name: myUserName,
-        isHost: false,
-        score: 0,
-      });
-    }
-
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(roomData));
-      localStorage.setItem(`RR_ROOM_${cleanRoomId}`, JSON.stringify(roomData));
-      localStorage.setItem(`rr_snapshot_${cleanRoomId}`, JSON.stringify(roomData));
-      localStorage.setItem(`rr_room_state_${cleanRoomId}`, JSON.stringify(roomData));
-    } catch (e) {
-      console.error('❌ LocalStorage 寫入失敗：', e);
-    }
-
-    roomState.players.clear();
-    roomData.players.forEach((p) => roomState.addPlayer(p));
-
-    const info = {
-      roomId: cleanRoomId,
-      userId: myUserId,
-      userName: myUserName,
-      isHost: false,
-      useSilver,
-      mode: roomManager.mode || '⚡ 本地分頁同步',
-    };
-
-    mpHUD.setInRoom(true, info);
-    mpHUD.updatePhase(roomData.started ? ROOM_PHASE.RACING : ROOM_PHASE.LOBBY);
-    mpHUD.updatePlayers(roomData.players, false);
-
-    if (!roomData.started) {
-      renderer.setTarget(null);
-      if (elTargetIcon) {
-        elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
-      }
-      if (elTargetText) {
-        elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
-      }
-    } else {
-      applyRoundDataToGuest(roomData);
-    }
-
-    if (window.history.replaceState) {
-      window.history.replaceState(null, '', `#room=${cleanRoomId}`);
-    }
-
-    showToast(`成功加入房間【${cleanRoomId}】！地圖與玩家名單已同步完成 🎮`, 'success');
-
-    startGuestPolling(cleanRoomId);
-
-    // 網路連線以獨立 try...catch 包裹，絕不中斷主流程
-    try {
-      if (roomManager) {
-        await roomManager.connect(cleanRoomId, myUserName, false);
-        const joinMsg = {
-          player: { id: myUserId, name: myUserName, isHost: false },
-          user: { id: myUserId, name: myUserName },
-          players: roomData.players,
-        };
-        roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
-        roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
-      }
-    } catch (netErr) {
-      console.warn('⚠️ 外部網路連線異常，維持本機模式運行：', netErr);
-    }
-
-    return true;
-  } catch (err) {
-    console.error('加入房間失敗:', err);
-    showToast('連線失敗：' + err.message, 'warn');
+    switchGameMode('solo');
     return false;
   }
+
+  // 2. 立即同步地圖與機器人
+  loadBoardFromConfig(roomData.boardConfig);
+  if (roomData.robotPositions) {
+    loadRobotsFromPositions(roomData.robotPositions);
+  }
+
+  const useSilver = Boolean(roomData.useSilver);
+  roomState.useSilver = useSilver;
+  updateRobotVariantUI(useSilver);
+  if (mpHUD) mpHUD.setVariant(useSilver);
+
+  roomState.roomId = cleanId;
+  roomState.phase = roomData.started ? ROOM_PHASE.RACING : ROOM_PHASE.LOBBY;
+
+  // 3. 更新 players 名單回存
+  const myUserId = roomManager.userId;
+  const myUserName = (userName && userName.trim()) || roomManager.userName || '玩家';
+  roomManager.userName = myUserName;
+  roomManager.isHost = false;
+  roomManager.roomId = cleanId;
+
+  if (!Array.isArray(roomData.players)) roomData.players = [];
+  const existingIdx = roomData.players.findIndex(
+    (p) => p.id === myUserId || (!p.isHost && p.name === myUserName)
+  );
+  if (existingIdx >= 0) {
+    roomData.players[existingIdx].id = myUserId;
+    roomData.players[existingIdx].name = myUserName;
+    roomData.players[existingIdx].isHost = false;
+  } else {
+    roomData.players.push({ id: myUserId, name: myUserName, isHost: false, score: 0 });
+  }
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(roomData));
+    localStorage.setItem(`RR_ROOM_${cleanId}`, JSON.stringify(roomData));
+    localStorage.setItem(`rr_snapshot_${cleanId}`, JSON.stringify(roomData));
+    localStorage.setItem(`rr_room_state_${cleanId}`, JSON.stringify(roomData));
+  } catch (e) {
+    console.error('❌ LocalStorage 寫入失敗：', e);
+  }
+
+  roomState.players.clear();
+  roomData.players.forEach((p) => roomState.addPlayer(p));
+
+  const info = {
+    roomId: cleanId,
+    userId: myUserId,
+    userName: myUserName,
+    isHost: false,
+    useSilver,
+    mode: roomManager.mode || '⚡ 本地分頁同步',
+  };
+
+  mpHUD.setInRoom(true, info);
+  mpHUD.updatePhase(roomData.started ? ROOM_PHASE.RACING : ROOM_PHASE.LOBBY);
+  mpHUD.updatePlayers(roomData.players, false);
+
+  if (!roomData.started) {
+    renderer.setTarget(null);
+    if (elTargetIcon) {
+      elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
+    }
+    if (elTargetText) {
+      elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
+    }
+  } else {
+    applyRoundDataToGuest(roomData);
+  }
+
+  if (window.history.replaceState) {
+    window.history.replaceState(null, '', `#room=${cleanId}`);
+  }
+
+  showToast(`成功加入房間【${cleanId}】！地圖與玩家名單已同步完成 🎮`, 'success');
+
+  // 4. 啟動輪詢
+  startGuestPolling(cleanId);
+
+  // 5. 最後才嘗試建立輔助網路連線，報錯直接吞掉不影響遊戲
+  try {
+    if (roomManager) {
+      await roomManager.joinRoom(cleanId, myUserName);
+      const joinMsg = {
+        player: { id: myUserId, name: myUserName, isHost: false },
+        user: { id: myUserId, name: myUserName },
+        players: roomData.players,
+      };
+      roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
+      roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
+    }
+  } catch (netErr) {
+    console.warn('網路連線失敗，維持本地 LocalStorage 模式:', netErr);
+  }
+
+  return true;
 }
 
 const joinMultiplayerRoom = joinRoomWithRetry;
@@ -2199,22 +2198,26 @@ async function init() {
     }
 
     // 5. 監聽網址 Hash 變動（例如使用者在已開啟的分頁貼上 #room=xxxx）
-    window.addEventListener('hashchange', async () => {
-      if (roomManager.isHost) return;
-      const inviteId = parseRoomFromHash();
-      if (inviteId) {
-        if (
-          roomManager.roomId &&
-          String(roomManager.roomId).replace(/[^a-zA-Z0-9]/g, '') === inviteId
-        ) {
-          return;
+    window.addEventListener('hashchange', () => {
+      (async () => {
+        if (roomManager.isHost) return;
+        const inviteId = parseRoomFromHash();
+        if (inviteId) {
+          if (
+            roomManager.roomId &&
+            String(roomManager.roomId).replace(/[^a-zA-Z0-9]/g, '') === inviteId
+          ) {
+            return;
+          }
+          const name =
+            mpHUD?.inputName?.value?.trim() ||
+            '玩家_' + Math.floor(100 + Math.random() * 900);
+          if (mpHUD?.inputRoom) mpHUD.inputRoom.value = inviteId;
+          await joinRoomWithRetry(inviteId, name);
         }
-        const name =
-          mpHUD?.inputName?.value?.trim() ||
-          '玩家_' + Math.floor(100 + Math.random() * 900);
-        if (mpHUD?.inputRoom) mpHUD.inputRoom.value = inviteId;
-        await joinRoomWithRetry(inviteId, name);
-      }
+      })().catch((err) => {
+        console.warn('🔥 [Hashchange Error Caught]:', err);
+      });
     });
   } catch (err) {
     console.error('[Init Failed]', err);
@@ -2225,4 +2228,6 @@ async function init() {
   }
 }
 
-init();
+init().catch((err) => {
+  console.warn('🔥 [Init Error Caught]:', err);
+});
