@@ -336,16 +336,16 @@ export class MultiplayerHUD {
   }
 
   _bindEvents() {
-    // 建立房間（若無輸入代碼則自動隨機生成 4 碼數字代碼）
+    // 建立房間：每次點擊建立新房間強制重新生成全新隨機 4 碼房號，嚴禁讀取舊房號
     this.container.querySelector('#btn-create-room').addEventListener('click', () => {
       const name = this._saveAndGetName();
-      let roomId = this.inputRoom.value.trim();
-      if (!roomId) {
-        roomId = String(Math.floor(1000 + Math.random() * 9000));
-        this.inputRoom.value = roomId;
+      const newRoomId = String(Math.floor(1000 + Math.random() * 9000));
+      this.inputRoom.value = newRoomId;
+      if (typeof window !== 'undefined') {
+        window.location.hash = `room=${newRoomId}`;
       }
       const useSilver = Boolean(this.inputUseSilver?.checked);
-      this._call('createRoom', { roomId, userName: name, useSilver });
+      this._call('createRoom', { roomId: newRoomId, userName: name, useSilver });
     });
 
     // 加入房間
@@ -467,12 +467,14 @@ export class MultiplayerHUD {
   }
 
   _checkUrlHash() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return null;
     const match = window.location.hash.match(/room=([a-zA-Z0-9_-]+)/);
     if (match && match[1]) {
       this.inputRoom.value = match[1];
       this._call('switchToMulti');
+      return match[1];
     }
+    return null;
   }
 
   _showToast(msg, type = 'info') {

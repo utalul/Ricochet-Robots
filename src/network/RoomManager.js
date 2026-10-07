@@ -15,6 +15,9 @@ export const NETWORK_MODE = Object.freeze({
 });
 
 export const MSG_TYPE = Object.freeze({
+  HELLO_JOIN: 'HELLO_JOIN',         // 新玩家主動送出加入廣播
+  SYNC_STATE: 'SYNC_STATE',         // 房主回送全狀態同步 (地圖配置、機器人起點、變體開關、玩家名單)
+  PRESENCE_PING: 'PRESENCE_PING',   // 在線心跳 Ping (每 2 秒一次維護在線玩家名單)
   PLAYER_JOIN: 'PLAYER_JOIN',
   PLAYER_LEAVE: 'PLAYER_LEAVE',
   SYNC_REQUEST: 'SYNC_REQUEST',
@@ -67,6 +70,7 @@ export class RoomManager {
 
     this._channel = null;
     this._supabase = null;
+    this._heartbeatTimer = null;
     this._listeners = new Map();
   }
 
@@ -163,7 +167,14 @@ export class RoomManager {
       mode: this.mode,
     });
 
-    // 廣播加入通知
+    // 廣播加入通知 (HELLO_JOIN 與 PLAYER_JOIN 雙發確保相容)
+    this.send(MSG_TYPE.HELLO_JOIN, {
+      player: {
+        id: this.userId,
+        name: this.userName,
+        isHost: this.isHost,
+      },
+    });
     this.send(MSG_TYPE.PLAYER_JOIN, {
       player: {
         id: this.userId,
@@ -179,6 +190,9 @@ export class RoomManager {
       });
     }
 
+    // 啟動在線心跳 Ping (每 2 秒一次維護在線玩家名單)
+    this._startHeartbeat();
+
     return {
       roomId: this.roomId,
       userId: this.userId,
@@ -190,7 +204,15 @@ export class RoomManager {
 
   _initBroadcastChannel() {
     this.mode = NETWORK_MODE.BROADCAST_CHANNEL;
-    const channelName = `ricochet_robots_room_${this.roomId}`;
+    const channelName = `ricochet_robots_channel_${String(this.roomId).trim()}`;
+    if (this._channel) {
+      try {
+        if (typeof this._channel.close === 'function') this._channel.close();
+      } catch (err) {
+        // 忽略
+      }
+      this._channel = null;
+    }
     this._channel = new BroadcastChannel(channelName);
     this._channel.onmessage = (event) => {
       this._handleIncomingMessage(event.data);
@@ -231,7 +253,31 @@ export class RoomManager {
     }
   }
 
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    if (typeof setInterval === 'undefined') return;
+    this._heartbeatTimer = setInterval(() => {
+      if (this.roomId && this._channel) {
+        this.send(MSG_TYPE.PRESENCE_PING, {
+          player: {
+            id: this.userId,
+            name: this.userName,
+            isHost: this.isHost,
+          },
+        });
+      }
+    }, 2000);
+  }
+
+  _stopHeartbeat() {
+    if (this._heartbeatTimer) {
+      clearInterval(this._heartbeatTimer);
+      this._heartbeatTimer = null;
+    }
+  }
+
   async leaveRoom() {
+    this._stopHeartbeat();
     if (!this.roomId) return;
     try {
       this.send(MSG_TYPE.PLAYER_LEAVE, {
@@ -378,11 +424,25 @@ export class RoomManager {
     });
   }
 
-  /** 房主發送全狀態快照同步 */
-  sendSyncResponse(targetPlayerId, snapshot) {
+  /** 房主發送全狀態同步 (SYNC_STATE) */
+  sendSyncState(targetPlayerId, syncData) {
+    this.send(MSG_TYPE.SYNC_STATE, {
+      targetPlayerId,
+      hostId: this.userId,
+      ...syncData,
+      timestamp: Date.now(),
+    });
+  }
+
+  /** 房主發送全狀態快照同步 (SYNC_RESPONSE) */
+  sendSyncResponse(targetPlayerId, snapshotOrData) {
+    const payload =
+      snapshotOrData && snapshotOrData.snapshot
+        ? snapshotOrData
+        : { snapshot: snapshotOrData };
     this.send(MSG_TYPE.SYNC_RESPONSE, {
       targetPlayerId,
-      snapshot,
+      ...payload,
       timestamp: Date.now(),
     });
   }

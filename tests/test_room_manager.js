@@ -236,9 +236,66 @@ async function runTest() {
   assert(!copiedText.includes('test=123'), '邀請連結已清除原本的 query 參數');
   assert(execCommandArg === 'copy', '非 secureContext 時順利觸發 execCommand copy fallback');
   assert(toastMsg && toastMsg.includes('8392'), '觸發 Toast 提示告知已複製');
-
   delete globalThis.window;
   delete globalThis.document;
+
+  section('6. HELLO_JOIN、SYNC_STATE 與 PRESENCE_PING 狀態同步');
+  const syncRoomId = 'room_sync_' + Date.now();
+  const hostMgr = new RoomManager();
+  const guestMgr = new RoomManager();
+
+  let hostReceivedHello = null;
+  let guestReceivedSyncState = null;
+  let hostReceivedPresencePing = null;
+
+  hostMgr.on(MSG_TYPE.HELLO_JOIN, (data) => {
+    hostReceivedHello = data;
+    // 房主回應全狀態同步
+    hostMgr.sendSyncState(data.payload.player.id, {
+      boardConfig: { quadBoardIds: ['A_01', 'B_01', 'C_01', 'D_01'] },
+      robotPositions: { red: { r: 1, c: 1 }, blue: { r: 2, c: 2 } },
+      useSilver: false,
+      members: [{ id: hostMgr.userId, name: 'HostAlice', isHost: true }],
+    });
+  });
+
+  guestMgr.on(MSG_TYPE.SYNC_STATE, (data) => {
+    guestReceivedSyncState = data;
+  });
+
+  hostMgr.on(MSG_TYPE.PRESENCE_PING, (data) => {
+    hostReceivedPresencePing = data;
+  });
+
+  await hostMgr.createRoom(syncRoomId, 'HostAlice');
+  await guestMgr.joinRoom(syncRoomId, 'GuestBob');
+  await sleep(80);
+
+  assert(hostReceivedHello !== null, '房主收到新玩家 HELLO_JOIN 廣播');
+  assert(hostReceivedHello?.payload?.player?.name === 'GuestBob', 'HELLO_JOIN 玩家名稱為 GuestBob');
+  assert(guestReceivedSyncState !== null, '新玩家收到房主 SYNC_STATE 全狀態同步');
+  assert(
+    guestReceivedSyncState?.payload?.boardConfig?.quadBoardIds?.[0] === 'A_01',
+    'SYNC_STATE 包含版圖配置 A_01'
+  );
+  assert(
+    guestReceivedSyncState?.payload?.robotPositions?.red?.r === 1,
+    'SYNC_STATE 包含機器人起點配置'
+  );
+
+  // 測試心跳
+  guestMgr.send(MSG_TYPE.PRESENCE_PING, {
+    player: { id: guestMgr.userId, name: guestMgr.userName, isHost: false },
+  });
+  await sleep(60);
+  assert(hostReceivedPresencePing !== null, '房主收到心跳 PRESENCE_PING');
+  assert(
+    hostReceivedPresencePing?.payload?.player?.name === 'GuestBob',
+    '心跳來源玩家為 GuestBob'
+  );
+
+  await hostMgr.leaveRoom();
+  await guestMgr.leaveRoom();
 
   section('測試結果');
   console.log(`  通過: ${passed}  失敗: ${failed}`);
