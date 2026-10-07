@@ -244,10 +244,11 @@ export class RoomManager {
     this._channel = new BroadcastChannel(channelName);
 
     const onMessage = (event) => {
-      console.log('[DEBUG_CHANNEL_RECV]', event.data);
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        console.log('[Broadcast Received]', data);
+        if (data?.type !== MSG_TYPE.PRESENCE_PING) {
+          console.log('[Broadcast Received]', data);
+        }
         this._handleIncomingMessage(data);
       } catch (err) {
         console.error('[Broadcast Message Parse Error]', err);
@@ -283,7 +284,10 @@ export class RoomManager {
     // 2. 同步發送 BroadcastChannel 作為雙重保障
     if (this._channel) {
       try {
-        console.log('[DEBUG_CHANNEL_SEND]', msg);
+        const msgType = msg?.type || (typeof msg === 'object' && msg?.payload?.type);
+        if (msgType !== MSG_TYPE.PRESENCE_PING) {
+          console.log('[DEBUG_CHANNEL_SEND]', msg);
+        }
         this._channel.postMessage(typeof msg === 'string' ? msg : JSON.stringify(envelope));
       } catch (err) {
         console.error('[Broadcast Post Error]', err);
@@ -455,14 +459,18 @@ export class RoomManager {
     this._stopHeartbeat();
     if (typeof setInterval === 'undefined') return;
     this._heartbeatTimer = setInterval(() => {
-      if (this.roomId && this._channel) {
-        this.send(MSG_TYPE.PRESENCE_PING, {
-          player: {
-            id: this.userId,
-            name: this.userName,
-            isHost: this.isHost,
-          },
-        });
+      try {
+        if (this.roomId && this._channel) {
+          this.send(MSG_TYPE.PRESENCE_PING, {
+            player: {
+              id: this.userId,
+              name: this.userName,
+              isHost: this.isHost,
+            },
+          });
+        }
+      } catch (e) {
+        // 心跳在後台默默維持，不拋出錯誤
       }
     }, 2000);
   }
@@ -489,12 +497,12 @@ export class RoomManager {
     if (this._channel) {
       if (typeof this._channel.untrack === 'function') {
         try {
-          await this._channel.untrack();
+          await this._channel.untrack().catch?.(() => {});
         } catch {}
       }
       if (typeof this._channel.unsubscribe === 'function') {
         try {
-          await this._channel.unsubscribe();
+          await this._channel.unsubscribe().catch?.(() => {});
         } catch {}
       }
       if (typeof this._channel.close === 'function') {
@@ -524,7 +532,9 @@ export class RoomManager {
       ...payload,
     };
 
-    console.log(`[RoomSync] [Send ${type}]`, envelope);
+    if (type !== MSG_TYPE.PRESENCE_PING) {
+      console.log(`[RoomSync] [Send ${type}]`, envelope);
+    }
 
     if (this.mode === NETWORK_MODE.SUPABASE_REALTIME && this._channel.send) {
       const eventName =
@@ -582,7 +592,9 @@ export class RoomManager {
       }
     }
 
-    console.log(`[RoomSync] [Received ${msg.type}] from ${senderId || 'unknown'}:`, msg);
+    if (msg.type !== MSG_TYPE.PRESENCE_PING) {
+      console.log(`[RoomSync] [Received ${msg.type}] from ${senderId || 'unknown'}:`, msg);
+    }
 
     const senderName =
       msg.senderName ||

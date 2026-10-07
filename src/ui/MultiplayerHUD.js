@@ -470,7 +470,18 @@ export class MultiplayerHUD {
 
   _call(name, ...args) {
     const fn = this.h?.[name];
-    if (typeof fn === 'function') fn(...args);
+    if (typeof fn === 'function') {
+      try {
+        const res = fn(...args);
+        if (res && typeof res.catch === 'function') {
+          res.catch((err) => {
+            console.error(`[MultiplayerHUD] Handler "${name}" rejected:`, err);
+          });
+        }
+      } catch (err) {
+        console.error(`[MultiplayerHUD] Handler "${name}" error:`, err);
+      }
+    }
   }
 
   _saveAndGetName() {
