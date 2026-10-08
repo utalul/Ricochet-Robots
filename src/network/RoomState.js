@@ -114,6 +114,7 @@ export class RoomState {
     targetDeck = null,
     useSilver = false,
     phase = ROOM_PHASE.RACING,
+    countdownEnd = null,
   }) {
     if (!grid || !initialRobots || !target) {
       throw new Error('grid, initialRobots, and target are required to start a round');
@@ -130,7 +131,8 @@ export class RoomState {
     if (phase === ROOM_PHASE.GAME_OVER) this.status = ROOM_STATUS.FINISHED;
     else if (phase !== ROOM_PHASE.LOBBY) this.status = ROOM_STATUS.PLAYING;
     this.countdownDuration = duration;
-    this.countdownEnd = phase === ROOM_PHASE.THINKING ? null : Date.now() + duration * 1000;
+    this.countdownEnd =
+      countdownEnd || (phase === ROOM_PHASE.THINKING ? null : Date.now() + duration * 1000);
 
     this.bids = [];
     this.roundWinner = null;

@@ -191,7 +191,7 @@ export class MultiplayerHUD {
                 🚀 開始遊戲
               </button>
               <button type="button" id="btn-lobby-waiting" class="btn-waiting" disabled style="display: none;">
-                ⏳ 等待房主開始遊戲...
+                ⏳ 已加入房間！等待房主開啟比賽…
               </button>
             </div>
           </div>
@@ -504,11 +504,15 @@ export class MultiplayerHUD {
     if (inRoom && info) {
       const code = info.roomId ? String(info.roomId) : '';
       this.setRoomCode(code);
-      this.netBadge.textContent = info.mode && info.mode.includes('Cloud') ? '🌐 即時多人連線' : '⚡ 本機分頁連線';
+      this.netBadge.textContent =
+        info.mode && (info.mode.includes('Cloud') || info.mode.includes('🌐') || info.mode.includes('Firebase'))
+          ? '🌐 即時多人連線'
+          : '⚡ 本機分頁連線';
       this.setVariant(Boolean(info.useSilver));
       if (history.replaceState && code) {
         history.replaceState(null, '', `#room=${code}`);
       }
+      this.updatePhase(this.currentPhase || 'LOBBY');
     } else {
       this.setRoomCode('');
       this.setVariant(false);
@@ -615,8 +619,11 @@ export class MultiplayerHUD {
       case ROOM_PHASE.COUNTDOWN:
         this.phaseBanner.classList.add('phase-countdown');
         this.phaseBanner.textContent = '🏃 解題競速中：在自己的棋盤上找出最少步數';
-        if (phaseData.countdownEnd) {
-          this.startTimer(phaseData.countdownEnd, phaseData.countdownDuration || 120);
+        {
+          const end =
+            phaseData.countdownEnd ||
+            Date.now() + (phaseData.countdownDuration || 120) * 1000;
+          this.startTimer(end, phaseData.countdownDuration || 120);
         }
         break;
 

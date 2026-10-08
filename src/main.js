@@ -173,11 +173,22 @@ function showRoundModal(title, detailHtml, isDraw = false) {
   if (!elRoundModal) return;
   elRoundModalEmoji.textContent = isDraw ? '⌛' : '🏁';
   elRoundModalTitle.textContent = title;
-  elRoundModalDetail.innerHTML = detailHtml;
-  elRoundModal.removeAttribute('hidden');
+
+  const isHost = currentMode === 'multi' ? Boolean(roomManager.isHost) : true;
   if (elBtnRoundModalNext) {
-    elBtnRoundModalNext.style.display = roomManager.isHost ? 'inline-block' : 'none';
+    elBtnRoundModalNext.style.display = isHost ? 'inline-block' : 'none';
   }
+
+  let content = detailHtml;
+  if (currentMode === 'multi' && !isHost) {
+    content += `
+      <div class="modal-guest-waiting" style="margin-top: 14px; padding: 10px 14px; background: rgba(79, 195, 247, 0.1); border: 1px solid rgba(79, 195, 247, 0.3); border-radius: 8px; color: #4fc3f7; font-weight: 600; text-align: center;">
+        ⏳ 等待房主開啟下一題…
+      </div>
+    `;
+  }
+  elRoundModalDetail.innerHTML = content;
+  elRoundModal.removeAttribute('hidden');
 }
 
 function hideRoundModal() {
@@ -608,14 +619,15 @@ function handleReset() {
 
 /** 下一題 (N) */
 function handleNextRound() {
+  if (currentMode === 'multi' && !roomManager.isHost) {
+    showToast('只有房主可以開啟下一輪比賽', 'info');
+    return;
+  }
+
   hideSoloModal();
   hideRoundModal();
 
   if (currentMode === 'multi') {
-    if (!roomManager.isHost) {
-      showToast('只有房主可以開啟下一輪', 'info');
-      return;
-    }
     startMultiplayerRound();
     return;
   }
@@ -929,6 +941,7 @@ function applyRoundDataToGuest(data) {
     target,
     round,
     duration,
+    countdownEnd: data.countdownEnd,
     useSilver,
     phase: ROOM_PHASE.RACING,
   });
@@ -1252,7 +1265,7 @@ function setupMultiplayerNetwork() {
         }
       }
 
-      if (roomState.initialRobots && target) {
+      if (roomState.initialRobots && target && roomState.phase === ROOM_PHASE.RACING) {
         localMultiGameState.initRound(currentGrid, roomState.initialRobots, target);
         renderer.renderRobots(localMultiGameState.getRobots(), selectedRobot, { animate: false });
       }
@@ -1361,6 +1374,7 @@ function setupMultiplayerNetwork() {
       target: payload.target,
       round: payload.round || 1,
       duration: payload.duration || 120,
+      countdownEnd: payload.countdownEnd,
       useSilver,
       phase: ROOM_PHASE.RACING,
     });
@@ -1438,6 +1452,7 @@ function setupMultiplayerNetwork() {
       target: payload.target,
       round: payload.round,
       duration: payload.duration || 120,
+      countdownEnd: payload.countdownEnd,
       useSilver,
     });
 
@@ -1702,7 +1717,13 @@ function startMultiplayerGame() {
   updateHUD();
 
   // 廣播給房間內所有玩家：開始遊戲
-  updateRoomSnapshot({ phase: ROOM_PHASE.RACING, round: 1, target });
+  updateRoomSnapshot({
+    phase: ROOM_PHASE.RACING,
+    round: 1,
+    target,
+    countdownEnd: roomState.countdownEnd,
+    countdownDuration: 120,
+  });
   roomManager.sendStartGame({
     round: 1,
     grid: currentGrid,
@@ -1710,6 +1731,8 @@ function startMultiplayerGame() {
     initialRobots,
     target,
     duration: 120,
+    countdownEnd: roomState.countdownEnd,
+    countdownDuration: 120,
     useSilver,
     hostPlayerId: roomState.hostPlayerId,
     status: ROOM_STATUS.PLAYING,
@@ -1817,7 +1840,13 @@ function startMultiplayerRound() {
   updateHUD();
 
   // 廣播給房間內所有玩家
-  updateRoomSnapshot({ phase: ROOM_PHASE.RACING, round: roundNum, target: nextTarget });
+  updateRoomSnapshot({
+    phase: ROOM_PHASE.RACING,
+    round: roundNum,
+    target: nextTarget,
+    countdownEnd: roomState.countdownEnd,
+    countdownDuration: 120,
+  });
   roomManager.sendNewRound({
     round: roundNum,
     grid: currentGrid,
@@ -1825,6 +1854,8 @@ function startMultiplayerRound() {
     initialRobots: nextInitialRobots,
     target: nextTarget,
     duration: 120,
+    countdownEnd: roomState.countdownEnd,
+    countdownDuration: 120,
     useSilver,
     hostPlayerId: roomState.hostPlayerId,
     status: ROOM_STATUS.PLAYING,
@@ -2041,21 +2072,34 @@ async function handleGuestJoin(roomId, userName) {
     });
   }
 
-  // 4. 更新畫面人數與鎖定按鈕
+  // 4. 連線至房間並登記在線名單
+  let connMode = roomManager.mode || '🌐 即時多人連線';
+  try {
+    if (roomManager) {
+      const conn = await roomManager.joinRoom(cleanId, myUserName);
+      if (conn?.mode) connMode = conn.mode;
+    }
+  } catch (netErr) {
+    console.warn('網路連線警示，維持運作:', netErr);
+  }
+
+  // 5. 更新畫面與多人面板
   const info = {
     roomId: cleanId,
     userId: myUserId,
     userName: myUserName,
     isHost: false,
     useSilver,
-    mode: roomManager.mode || '⚡ 本地分頁同步',
+    mode: connMode,
   };
 
   mpHUD.setInRoom(true, info);
-  mpHUD.updatePhase(roomState.phase);
+  mpHUD.setRoomCode(cleanId);
+  mpHUD.setVariant(useSilver);
   mpHUD.updatePlayers(roomState.getPlayerList(), false);
 
-  if (!roomData.started) {
+  if (!roomData.started || roomData.phase === ROOM_PHASE.LOBBY) {
+    roomState.phase = ROOM_PHASE.LOBBY;
     renderer.setTarget(null);
     if (elTargetIcon) {
       elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
@@ -2063,46 +2107,25 @@ async function handleGuestJoin(roomId, userName) {
     if (elTargetText) {
       elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
     }
-  } else if (connectedByDiscovery) {
-    roomState.phase = ROOM_PHASE.LOBBY;
     mpHUD.updatePhase(ROOM_PHASE.LOBBY);
-    showToast('已連線至房間，等待房主傳送目前對局狀態', 'info');
   } else {
     applyRoundDataToGuest(roomData);
   }
 
+  // 廣播加入訊息通知房主
   try {
-    if (roomManager) {
-      if (!connectedByDiscovery) {
-        const connection = await roomManager.joinRoom(cleanId, myUserName);
-        info.mode = connection.mode;
-        mpHUD.setInRoom(true, info);
-        if (cloudConfigured && connection.mode !== NETWORK_MODE.SUPABASE_REALTIME) {
-          throw new Error('多人連線服務暫時無法使用');
-        }
-      }
-      const joinMsg = {
-        player: { id: myUserId, name: myUserName, isHost: false },
-        user: { id: myUserId, name: myUserName },
-        players: roomData.players,
-      };
-      roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
-      roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
-    }
-  } catch (netErr) {
-    console.warn('網路連線失敗，維持本地 LocalStorage 模式:', netErr);
-    if (cloudConfigured) {
-      await roomManager.leaveRoom();
-      mpHUD.setInRoom(false);
-      switchGameMode('solo');
-      showToast('多人連線服務暫時無法使用，請稍後再試', 'warn', 5000);
-      return false;
-    }
-  }
+    const joinMsg = {
+      player: { id: myUserId, name: myUserName, isHost: false },
+      user: { id: myUserId, name: myUserName },
+      players: roomState.getPlayerList(),
+    };
+    roomManager.send(MSG_TYPE.PLAYER_JOIN, joinMsg);
+    roomManager.send(MSG_TYPE.HELLO_JOIN, joinMsg);
+  } catch (e) {}
 
   if (!cloudConfigured) startGuestPolling(cleanId);
 
-  showToast(`成功加入房間【${cleanId}】！地圖與玩家名單已同步完成 🎮`, 'success');
+  showToast(`成功加入房間【${cleanId}】！等待房主開局 🎮`, 'success');
   return true;
 }
 
@@ -2374,6 +2397,9 @@ async function init() {
         newGame: () => handleNewGame(),
         confirm: () => {
           if (isSoloModalOpen) handleNextRound();
+          if (currentMode === 'multi' && roomManager.isHost && !elRoundModal?.hasAttribute('hidden')) {
+            handleNextRound();
+          }
         },
         cancel: () => {
           if (isSoloModalOpen) hideSoloModal();
