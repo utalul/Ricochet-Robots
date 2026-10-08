@@ -81,6 +81,11 @@ export async function copyRoomInviteLink(roomId, { showToast = null } = {}) {
   return textToCopy;
 }
 
+export function parseRoomIdFromHash(hash) {
+  const value = new URLSearchParams(String(hash || '').replace(/^#/, '')).get('room');
+  return value ? value.replace(/[^a-zA-Z0-9]/g, '') : null;
+}
+
 export class MultiplayerHUD {
   /**
    * @param {object} opts
@@ -116,7 +121,7 @@ export class MultiplayerHUD {
         <!-- 1. 大廳面板 (未進房時顯示) -->
         <div id="mp-lobby-card" class="card mp-card">
           <div class="card-title">🌐 多人房間大廳</div>
-          <p class="desc">全員 2 分鐘同步試走競速！支援本地雙分頁多開或 Supabase Realtime 至多 100 人同房競賽。</p>
+          <p class="desc">每位玩家在自己的棋盤上解題，完成後以最少步數競速得分。</p>
           <div class="form-row">
             <label for="mp-username">玩家暱稱：</label>
             <input type="text" id="mp-username" placeholder="輸入暱稱" maxlength="12" />
@@ -135,9 +140,6 @@ export class MultiplayerHUD {
             <button type="button" id="btn-create-room" class="primary">建立新房間</button>
             <button type="button" id="btn-join-room">加入房間</button>
           </div>
-          <div style="margin-top: 10px; text-align: center;">
-            <button type="button" id="btn-cloud-settings" class="btn-sm" style="width: 100%;">⚙️ 雲端連線設定 (Supabase)</button>
-          </div>
         </div>
 
         <!-- 2. 房間面板 (進房後顯示) -->
@@ -149,7 +151,6 @@ export class MultiplayerHUD {
               <span id="mp-variant-badge" class="badge" style="background: #455a64; color: #eceff1; display: none;">⚪ 白機器人</span>
             </div>
             <div class="room-header-btns">
-              <button type="button" id="btn-room-cloud-settings" class="btn-sm" title="雲端連線設定">⚙️ 設定</button>
               <button type="button" id="btn-copy-link" class="btn-sm" title="複製房間邀請網址">📋 複製邀請</button>
               <button type="button" id="btn-leave-room" class="btn-sm btn-danger">離開</button>
             </div>
@@ -221,7 +222,7 @@ export class MultiplayerHUD {
 
             <!-- 階段指示橫幅 -->
             <div id="mp-phase-banner" class="phase-banner phase-countdown">
-              🏃 同步競速中！請在本地棋盤自由試走，找出最短路徑
+              🏃 解題競速中：在自己的棋盤上找出最少步數
             </div>
 
             <!-- 個人最佳成績狀態卡 -->
@@ -250,32 +251,6 @@ export class MultiplayerHUD {
             <div id="mp-host-controls" class="host-controls" hidden style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
               <button type="button" id="btn-host-settle" class="btn-sm">房主：提前結算</button>
               <button type="button" id="btn-host-next" class="primary btn-sm">房主：開始下一題 <kbd>N</kbd></button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 3. 雲端連線設定彈窗 -->
-        <div id="mp-settings-modal" class="modal" hidden>
-          <div class="modal-box" style="text-align: left; max-width: 440px;">
-            <h2 style="margin-top: 0; font-size: 1.25rem; color: var(--accent);">⚙️ 雲端連線設定</h2>
-            <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 12px; line-height: 1.5;">
-              預設使用瀏覽器原生 <strong>BroadcastChannel</strong> 進行本機多開雙分頁連線。<br/>
-              若要進行跨裝置、手機或遠端百人連線，可免費至 <strong>Supabase</strong> 註冊專案並填寫憑證：
-            </p>
-            <div class="form-row" style="margin-bottom: 8px;">
-              <label for="cfg-supabase-url" style="width: 90px; font-size: 0.82rem;">Project URL:</label>
-              <input type="url" id="cfg-supabase-url" placeholder="https://xyz.supabase.co" />
-            </div>
-            <div class="form-row" style="margin-bottom: 12px;">
-              <label for="cfg-supabase-key" style="width: 90px; font-size: 0.82rem;">Anon Key:</label>
-              <input type="text" id="cfg-supabase-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..." />
-            </div>
-            <div id="cfg-mode-status" style="font-size: 0.82rem; margin-bottom: 14px;"></div>
-            <div class="modal-actions" style="justify-content: flex-end; flex-wrap: wrap; gap: 6px;">
-              <button type="button" id="btn-default-settings" class="btn-sm" style="background: #2e7d32; color: #fff;">一鍵帶入預設雲端憑證</button>
-              <button type="button" id="btn-save-settings" class="primary btn-sm">儲存並套用</button>
-              <button type="button" id="btn-clear-settings" class="btn-sm">清除 (還原本地)</button>
-              <button type="button" id="btn-close-settings" class="btn-sm">關閉</button>
             </div>
           </div>
         </div>
@@ -325,10 +300,6 @@ export class MultiplayerHUD {
     this.leaderboardEl = this.container.querySelector('#mp-leaderboard');
     this.hostControls = this.container.querySelector('#mp-host-controls');
 
-    this.settingsModal = this.container.querySelector('#mp-settings-modal');
-    this.inputCfgUrl = this.container.querySelector('#cfg-supabase-url');
-    this.inputCfgKey = this.container.querySelector('#cfg-supabase-key');
-    this.cfgStatus = this.container.querySelector('#cfg-mode-status');
 
     // 載入預設暱稱
     const savedName = localStorage.getItem('ricochet_player_name');
@@ -405,67 +376,6 @@ export class MultiplayerHUD {
       }
     });
 
-    // 雲端連線設定
-    const openSettings = () => {
-      this.inputCfgUrl.value = localStorage.getItem('SUPABASE_URL') || '';
-      this.inputCfgKey.value = localStorage.getItem('SUPABASE_ANON_KEY') || '';
-      this._updateSettingsStatus();
-      this.settingsModal.removeAttribute('hidden');
-    };
-    this.container.querySelector('#btn-cloud-settings')?.addEventListener('click', openSettings);
-    this.container.querySelector('#btn-room-cloud-settings')?.addEventListener('click', openSettings);
-
-    this.container.querySelector('#btn-close-settings')?.addEventListener('click', () => {
-      this.settingsModal.setAttribute('hidden', '');
-    });
-
-    this.container.querySelector('#btn-save-settings')?.addEventListener('click', () => {
-      const url = this.inputCfgUrl.value.trim();
-      const key = this.inputCfgKey.value.trim();
-      if (url && key) {
-        localStorage.setItem('SUPABASE_URL', url);
-        localStorage.setItem('SUPABASE_ANON_KEY', key);
-        this.settingsModal.setAttribute('hidden', '');
-        this._call('settingsChanged', { url, key });
-      } else {
-        alert('請填寫完整的 Project URL 與 Anon Key，或點擊「清除 (還原本地)」');
-      }
-    });
-
-    this.container.querySelector('#btn-default-settings')?.addEventListener('click', () => {
-      const defUrl = 'https://kvtxqtzqdrrqmkyntwuy.supabase.co';
-      const defKey =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2dHhxdHpxZHJycW1reW50d3V5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDk4NTU1NTUsImV4cCI6MjAyNTQzMTU1NX0.2xQn8lYvF3V6x2J3H8rW7mK9pL0nQ4sT1uV5wX7yZ9A';
-      this.inputCfgUrl.value = defUrl;
-      this.inputCfgKey.value = defKey;
-      localStorage.setItem('SUPABASE_URL', defUrl);
-      localStorage.setItem('SUPABASE_ANON_KEY', defKey);
-      this._updateSettingsStatus();
-      this._showToast('已帶入預設 Supabase 雲端測試憑證！', 'success');
-      this.settingsModal.setAttribute('hidden', '');
-      this._call('settingsChanged', { url: defUrl, key: defKey });
-    });
-
-    this.container.querySelector('#btn-clear-settings')?.addEventListener('click', () => {
-      localStorage.removeItem('SUPABASE_URL');
-      localStorage.removeItem('SUPABASE_ANON_KEY');
-      this.inputCfgUrl.value = '';
-      this.inputCfgKey.value = '';
-      this.settingsModal.setAttribute('hidden', '');
-      this._call('settingsChanged', { url: '', key: '' });
-    });
-  }
-
-  _updateSettingsStatus() {
-    const url = localStorage.getItem('SUPABASE_URL');
-    const key = localStorage.getItem('SUPABASE_ANON_KEY');
-    if (url && key) {
-      this.cfgStatus.textContent = '🌐 目前狀態：已啟用 Supabase 雲端即時連線（支援跨裝置、手機、雙分頁）';
-      this.cfgStatus.style.color = '#81c784';
-    } else {
-      this.cfgStatus.textContent = '⚡ 目前狀態：使用 BroadcastChannel（本地雙分頁模擬）';
-      this.cfgStatus.style.color = '#64b5f6';
-    }
   }
 
   _call(name, ...args) {
@@ -492,9 +402,8 @@ export class MultiplayerHUD {
 
   _checkUrlHash() {
     if (typeof window === 'undefined') return null;
-    const match = window.location.hash.match(/room=([a-zA-Z0-9_-]+)/);
-    if (match && match[1]) {
-      const clean = match[1].replace(/[^a-zA-Z0-9]/g, '');
+    const clean = parseRoomIdFromHash(window.location.hash);
+    if (clean) {
       this.inputRoom.value = clean;
       this._call('switchToMulti');
       return clean;
@@ -595,7 +504,7 @@ export class MultiplayerHUD {
     if (inRoom && info) {
       const code = info.roomId ? String(info.roomId) : '';
       this.setRoomCode(code);
-      this.netBadge.textContent = '⚡ 本地分頁同步';
+      this.netBadge.textContent = info.mode && info.mode.includes('Cloud') ? '🌐 即時多人連線' : '⚡ 本機分頁連線';
       this.setVariant(Boolean(info.useSilver));
       if (history.replaceState && code) {
         history.replaceState(null, '', `#room=${code}`);
@@ -623,14 +532,29 @@ export class MultiplayerHUD {
   updatePlayers(players = [], isHost = false) {
     if (this.roomInfo) this.roomInfo.isHost = isHost;
     if (this.roomInfo?.roomId) this.setRoomCode(this.roomInfo.roomId);
-    this.playerCount.textContent = String(players.length);
+    this.playerCount.textContent = String(players.filter((player) => player.connected !== false).length);
     this.playerChips.innerHTML = '';
     players.forEach((p) => {
-      const chip = document.createElement('span');
+      const chip = document.createElement('div');
       chip.className = 'player-chip';
-      const isMe = p.id === this.currentUserId ? ' (你)' : '';
-      const hostIcon = p.isHost ? ' 👑' : '';
-      chip.innerHTML = `${p.name}${hostIcon}${isMe} <span class="score">${p.score || 0}★</span>`;
+      chip.style.display = 'inline-flex';
+      chip.style.alignItems = 'center';
+      chip.style.gap = '5px';
+      const label = document.createElement('span');
+      label.textContent = `${p.nickname || p.name || '玩家'}${p.isHost ? ' 👑' : ''}${p.id === this.currentUserId ? ' (你)' : ''} · ${p.score || 0}★${p.connected === false ? ' · 離線' : ''}`;
+      chip.appendChild(label);
+      if (isHost && !p.isHost) {
+        const kick = document.createElement('button');
+        kick.type = 'button';
+        kick.className = 'btn-sm';
+        kick.textContent = '移除';
+        kick.setAttribute('aria-label', `移除玩家 ${p.nickname || p.name || p.id}`);
+        kick.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this._call('kickPlayer', p.id);
+        });
+        chip.appendChild(kick);
+      }
       this.playerChips.appendChild(chip);
     });
     this.hostControls.hidden = !isHost;
@@ -690,7 +614,7 @@ export class MultiplayerHUD {
       case ROOM_PHASE.RACING:
       case ROOM_PHASE.COUNTDOWN:
         this.phaseBanner.classList.add('phase-countdown');
-        this.phaseBanner.textContent = '🏃 同步競速中！請在本地棋盤自由試走，找出最短路徑';
+        this.phaseBanner.textContent = '🏃 解題競速中：在自己的棋盤上找出最少步數';
         if (phaseData.countdownEnd) {
           this.startTimer(phaseData.countdownEnd, phaseData.countdownDuration || 120);
         }

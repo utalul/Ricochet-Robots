@@ -335,6 +335,58 @@ section('9. 多人房間等待大廳狀態機 (LOBBY 階段與手動啟動)');
   assert(typeof room.countdownEnd === 'number', '開局後啟動 120 秒倒數計時器');
 }
 
+section('10. 三位玩家註冊、開局 roster 與各自獨立棋盤');
+{
+  const host = new RoomState({ roomId: '7406' });
+  host.roomCode = '7406';
+  host.addPlayer({ id: 'A', name: 'Host', isHost: true });
+  host.addPlayer({ id: 'B', name: 'Player B' });
+  host.addPlayer({ id: 'C', name: 'Player C' });
+  assert(host.getPlayerList().length === 3, 'A 建立房間後，B 與 C 都加入同一份 host roster');
+  assert(new Set(host.getPlayerList().map((p) => p.id)).size === 3, '三位玩家使用三個穩定且不重複的 player ID');
+  assert(host.startGame('B').accepted === false, 'B 無法代替房主開局');
+  assert(host.startGame('A').accepted, '只有 A 房主可以啟動遊戲');
+  assert(host.gamePlayers.length === 3, '開始遊戲時 gamePlayers 擷取 A、B、C 全部房間玩家');
+
+  const grid = emptyGrid();
+  host.startRound({ grid, initialRobots: baseRobots(), target: { color: 'red', shape: 'star', x: 0, y: 5 }, round: 1 });
+  host.gameState.applyMove('red', 'right');
+  host.gameState.applyMove('red', 'left');
+  const proof = host.validateSolution({
+    path: host.gameState.history,
+    moves: host.gameState.moveCount,
+    finalRobots: host.gameState.getRobots(),
+  });
+  assert(proof.accepted, '房主可重播並核驗達陣玩家提交的移動證明');
+  assert(!host.validateSolution({ path: host.gameState.history, moves: 99, finalRobots: host.gameState.getRobots() }).accepted,
+    '房主拒絕與移動紀錄不符的虛報步數');
+  const clientA = new RoomState({ roomId: '7406' });
+  const clientB = new RoomState({ roomId: '7406' });
+  const clientC = new RoomState({ roomId: '7406' });
+  for (const client of [clientA, clientB, clientC]) {
+    client.deserialize(host.serialize(), grid);
+    assert(client.gamePlayers.length === 3, '客戶端收到包含 A、B、C 的開局玩家名單');
+  }
+  const target = { color: 'red', shape: 'star', x: 0, y: 0 };
+  const startingRobots = baseRobots();
+  clientA.gameState.initRound(grid, startingRobots, target);
+  clientB.gameState.initRound(grid, startingRobots, target);
+  clientC.gameState.initRound(grid, startingRobots, target);
+  clientA.gameState.applyMove('red', 'left');
+  clientB.gameState.applyMove('blue', 'right');
+  clientC.gameState.applyMove('yellow', 'right');
+  assert(clientA.gameState.moveCount === 1 && clientB.gameState.moveCount === 1 && clientC.gameState.moveCount === 1,
+    'A、B、C 在各自棋盤獨立操作，步數不會互相覆寫');
+  assert(JSON.stringify(clientA.gameState.getRobots()) !== JSON.stringify(clientB.gameState.getRobots()),
+    '各玩家試走中的棋盤維持獨立狀態');
+
+  host.removePlayer('B');
+  assert(host.getPlayerList().length === 2, 'B 離房後房主名單即時移除 B');
+  host.addPlayer({ id: 'B', name: 'Player B rejoined' });
+  assert(host.getPlayerList().length === 3, 'B 使用原穩定 ID 回房不會產生重複玩家');
+  assert(host.getPlayer('B').id === 'B', 'B 回房後仍以原 playerId 註冊');
+}
+
 section('測試結果');
 console.log(`  通過: ${passed}  失敗: ${failed}`);
 if (failed > 0) process.exit(1);

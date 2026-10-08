@@ -1,35 +1,53 @@
 /**
  * config.js
  * 碰撞機器人 (Ricochet Robots) 全域連線設定。
- * 提供開箱即用的公開測試 Supabase Project URL 與 Anon Key。
+ * 整合 Google Firebase Realtime Database 永久在線即時連線。
  */
 
-export const DEFAULT_SUPABASE_CONFIG = Object.freeze({
-  // 免費測試用 Supabase 專案 (啟用 Realtime Broadcast 與 Presence)
-  url: 'https://kvtxqtzqdrrqmkyntwuy.supabase.co',
-  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2dHhxdHpxZHJycW1reW50d3V5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDk4NTU1NTUsImV4cCI6MjAyNTQzMTU1NX0.2xQn8lYvF3V6x2J3H8rW7mK9pL0nQ4sT1uV5wX7yZ9A',
+export const FIREBASE_CONFIG = Object.freeze({
+  apiKey: 'AIzaSyB4GLCii_Tfu2n8xLt5MzkuKje7jjiSgK0',
+  authDomain: 'ricochet-robots-30cc5.firebaseapp.com',
+  databaseURL: 'https://ricochet-robots-30cc5-default-rtdb.asia-southeast1.firebasedatabase.app',
+  projectId: 'ricochet-robots-30cc5',
+  storageBucket: 'ricochet-robots-30cc5.firebasestorage.app',
+  messagingSenderId: '16946155679',
+  appId: '1:16946155679:web:7acff2b109fa3541c012aa',
 });
 
 /**
- * 取得當前有效的 Supabase 設定
- * 優先順序：window.__SUPABASE_URL__ > localStorage > DEFAULT_SUPABASE_CONFIG
+ * 取得當前有效的 Firebase 設定
  */
-export function getSupabaseConfig() {
+export function getFirebaseConfig() {
   if (typeof window === 'undefined') return null;
-  const url =
-    window.__SUPABASE_URL__ ||
-    window.SUPABASE_CONFIG?.url ||
-    window.localStorage?.getItem('SUPABASE_URL') ||
-    DEFAULT_SUPABASE_CONFIG.url;
+  const buildEnv = (typeof import.meta !== 'undefined' && import.meta.env) || {};
+  const configs = [
+    {
+      apiKey: window.__FIREBASE_API_KEY__,
+      databaseURL: window.__FIREBASE_DATABASE_URL__,
+      projectId: window.__FIREBASE_PROJECT_ID__,
+    },
+    window.FIREBASE_CONFIG,
+    {
+      apiKey: buildEnv.VITE_FIREBASE_API_KEY,
+      databaseURL: buildEnv.VITE_FIREBASE_DATABASE_URL,
+      projectId: buildEnv.VITE_FIREBASE_PROJECT_ID,
+    },
+    {
+      apiKey: window.localStorage?.getItem('FIREBASE_API_KEY'),
+      databaseURL: window.localStorage?.getItem('FIREBASE_DATABASE_URL'),
+      projectId: window.localStorage?.getItem('FIREBASE_PROJECT_ID'),
+    },
+  ];
 
-  const anonKey =
-    window.__SUPABASE_ANON_KEY__ ||
-    window.SUPABASE_CONFIG?.anonKey ||
-    window.localStorage?.getItem('SUPABASE_ANON_KEY') ||
-    DEFAULT_SUPABASE_CONFIG.anonKey;
+  return configs.find((config) => config?.databaseURL && config?.apiKey) || FIREBASE_CONFIG;
+}
 
-  if (url && anonKey) {
-    return { url, anonKey };
-  }
+// 向後相容 Supabase 設定介面
+export const DEFAULT_SUPABASE_CONFIG = Object.freeze({
+  url: 'https://kvtxqtzqdrrqmkyntwuy.supabase.co',
+  anonKey: 'anon',
+});
+
+export function getSupabaseConfig() {
   return null;
 }

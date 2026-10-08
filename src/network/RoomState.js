@@ -37,6 +37,14 @@ export const BID_STATUS = Object.freeze({
   FAILED: 'failed',
 });
 
+export const ROOM_STATUS = Object.freeze({
+  CREATED: 'CREATED',
+  WAITING: 'WAITING',
+  PLAYING: 'PLAYING',
+  FINISHED: 'FINISHED',
+  CLOSED: 'CLOSED',
+});
+
 export class RoomState {
   /**
    * @param {object} [options]
@@ -45,6 +53,9 @@ export class RoomState {
    */
   constructor({ roomId = null, countdownDuration = 120 } = {}) {
     this.roomId = roomId;
+    this.roomCode = roomId ? String(roomId) : null;
+    this.hostPlayerId = null;
+    this.status = ROOM_STATUS.CREATED;
     this.phase = ROOM_PHASE.LOBBY;
     this.round = 1;
     this.grid = null;
@@ -52,8 +63,10 @@ export class RoomState {
     this.initialRobots = null;
     this.gameState = new GameState();
 
-    /** 玩家字典：id -> { id, name, isHost, score } */
+    /** Player State keyed by stable player ID. */
     this.players = new Map();
+    /** Frozen membership for the current game, captured by the host at start. */
+    this.gamePlayers = [];
 
     /** 排行榜與解法清單：{ playerId, playerName, moves, timestamp, status, path, finalRobots } */
     this.bids = [];
@@ -114,6 +127,8 @@ export class RoomState {
 
     this.gameState.initRound(this.grid, this.initialRobots, this.target);
     this.phase = phase;
+    if (phase === ROOM_PHASE.GAME_OVER) this.status = ROOM_STATUS.FINISHED;
+    else if (phase !== ROOM_PHASE.LOBBY) this.status = ROOM_STATUS.PLAYING;
     this.countdownDuration = duration;
     this.countdownEnd = phase === ROOM_PHASE.THINKING ? null : Date.now() + duration * 1000;
 
@@ -128,21 +143,96 @@ export class RoomState {
 
   // ---------- 玩家管理 ----------
 
-  addPlayer({ id, name, isHost = false, score = 0 }) {
+  addPlayer({
+    id,
+    playerId = id,
+    name,
+    nickname = name,
+    isHost = false,
+    score = 0,
+    robotColor = null,
+    joinedAt = Date.now(),
+    isReady = false,
+    connected = true,
+    position = null,
+    action = null,
+  }) {
+    id = playerId;
     if (!id) throw new Error('Player ID required');
     const existing = this.players.get(id);
+    if (isHost && !this.hostPlayerId) this.hostPlayerId = id;
     const player = {
       id,
-      name: name || `Player_${id.slice(0, 4)}`,
+      playerId: id,
+      name: nickname || `Player_${id.slice(0, 4)}`,
+      nickname: nickname || `Player_${id.slice(0, 4)}`,
       isHost: existing ? existing.isHost : isHost,
       score: existing ? existing.score : score,
+      robotColor: existing?.robotColor || robotColor || null,
+      joinedAt: existing?.joinedAt || joinedAt,
+      isReady: existing?.isReady ?? isReady,
+      connected,
+      position: position || existing?.position || null,
+      action: action || existing?.action || null,
     };
     this.players.set(id, player);
+    this.status = this.phase === ROOM_PHASE.LOBBY
+      ? (this.players.size > 1 ? ROOM_STATUS.WAITING : ROOM_STATUS.CREATED)
+      : this.status;
     return player;
+  }
+
+  setPlayerRobotColor(playerId, robotColor) {
+    const player = this.players.get(playerId);
+    if (!player) return { accepted: false, reason: 'PLAYER_NOT_REGISTERED' };
+    const allowedColors = ['red', 'blue', 'yellow', 'green', ...(this.useSilver ? ['silver'] : [])];
+    if (!allowedColors.includes(robotColor)) return { accepted: false, reason: 'INVALID_ROBOT_COLOR' };
+    player.robotColor = robotColor;
+    return { accepted: true, player };
+  }
+
+  startGame(playerId) {
+    if (playerId !== this.hostPlayerId) return { accepted: false, reason: 'HOST_ONLY' };
+    if (this.phase === ROOM_PHASE.GAME_OVER) return { accepted: false, reason: 'GAME_FINISHED' };
+    this.status = ROOM_STATUS.PLAYING;
+    this.gamePlayers = this.getPlayerList()
+      .filter((player) => player.connected !== false)
+      .map((player) => ({ ...player }));
+    return { accepted: true, players: this.gamePlayers.map((player) => ({ ...player })) };
+  }
+
+  validateSolution({ path, moves, finalRobots }) {
+    if (this.phase !== ROOM_PHASE.RACING || !this.grid || !this.initialRobots || !this.target) {
+      return { accepted: false, reason: 'ROOM_NOT_RACING' };
+    }
+    const moveCount = Number(moves);
+    if (!Array.isArray(path) || path.length !== moveCount || moveCount < 2) {
+      return { accepted: false, reason: 'INVALID_SOLUTION_LENGTH' };
+    }
+    const replay = new GameState().initRound(this.grid, this.initialRobots, this.target);
+    try {
+      for (const step of path) {
+        const result = replay.applyMove(step.color, step.direction);
+        if (!result.moved || (step.from && (step.from.x !== result.from.x || step.from.y !== result.from.y)) ||
+            (step.to && (step.to.x !== result.to.x || step.to.y !== result.to.y))) {
+          return { accepted: false, reason: 'INVALID_SOLUTION_PATH' };
+        }
+      }
+    } catch {
+      return { accepted: false, reason: 'INVALID_SOLUTION_PATH' };
+    }
+    if (!replay.checkGoalReached().success) return { accepted: false, reason: 'SOLUTION_DOES_NOT_REACH_GOAL' };
+    const actual = replay.getRobots();
+    if (!finalRobots || Object.keys(actual).some((color) =>
+      actual[color]?.x !== finalRobots[color]?.x || actual[color]?.y !== finalRobots[color]?.y
+    )) return { accepted: false, reason: 'FINAL_ROBOTS_MISMATCH' };
+    return { accepted: true, moves: moveCount, path: replay.history, finalRobots: actual };
   }
 
   removePlayer(id) {
     this.players.delete(id);
+    if (id === this.hostPlayerId) this.status = ROOM_STATUS.CLOSED;
+    else if (this.phase === ROOM_PHASE.LOBBY && this.players.size <= 1) this.status = ROOM_STATUS.CREATED;
     if (this.phase === ROOM_PHASE.DEMONSTRATING && this.activeDemonstratorId === id) {
       this.forfeitDemonstration(id);
     }
@@ -300,6 +390,7 @@ export class RoomState {
         this.completedTargets.length >= this.totalTargetsCount;
 
       this.phase = isGameOver ? ROOM_PHASE.GAME_OVER : ROOM_PHASE.ROUND_END;
+      this.status = isGameOver ? ROOM_STATUS.FINISHED : ROOM_STATUS.PLAYING;
 
       return {
         success: true,
@@ -401,6 +492,7 @@ export class RoomState {
     this.roundWinners = [];
     this.isDraw = false;
     this.phase = ROOM_PHASE.RACING;
+    this.status = ROOM_STATUS.PLAYING;
     return this;
   }
 
@@ -533,6 +625,9 @@ export class RoomState {
   serialize() {
     return {
       roomId: this.roomId,
+      roomCode: this.roomCode,
+      hostPlayerId: this.hostPlayerId,
+      status: this.status,
       phase: this.phase,
       round: this.round,
       target: this.target ? { ...this.target } : null,
@@ -553,12 +648,16 @@ export class RoomState {
       remainingTargetsCount: this.targetDeck ? this.targetDeck.length : 0,
       totalTargetsCount: this.totalTargetsCount,
       players: Array.from(this.players.values()),
+      gamePlayers: this.gamePlayers.map((player) => ({ ...player })),
     };
   }
 
   deserialize(snapshot, grid) {
     if (!snapshot) return;
     if (snapshot.roomId) this.roomId = snapshot.roomId;
+    if (snapshot.roomCode) this.roomCode = String(snapshot.roomCode);
+    if (snapshot.hostPlayerId) this.hostPlayerId = snapshot.hostPlayerId;
+    if (snapshot.status) this.status = snapshot.status;
     this.phase = snapshot.phase;
     this.round = snapshot.round || 1;
     this.target = snapshot.target ? { ...snapshot.target } : null;
@@ -580,8 +679,11 @@ export class RoomState {
 
     if (snapshot.players) {
       this.players.clear();
-      snapshot.players.forEach((p) => this.players.set(p.id, { ...p }));
+      snapshot.players.forEach((p) => this.players.set(p.playerId || p.id, { ...p, id: p.playerId || p.id }));
     }
+    this.gamePlayers = Array.isArray(snapshot.gamePlayers)
+      ? snapshot.gamePlayers.map((player) => ({ ...player }))
+      : [];
 
     if (grid && this.initialRobots && this.target) {
       this.grid = grid;

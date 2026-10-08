@@ -3,7 +3,8 @@
  * 執行：node tests/test_room_manager.js
  */
 import { RoomManager, MSG_TYPE, NETWORK_MODE } from '../src/network/RoomManager.js';
-import { copyRoomInviteLink } from '../src/ui/MultiplayerHUD.js';
+import { discoverRoomSnapshot } from '../src/network/RoomDiscovery.js';
+import { copyRoomInviteLink, parseRoomIdFromHash } from '../src/ui/MultiplayerHUD.js';
 
 let passed = 0;
 let failed = 0;
@@ -23,7 +24,90 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+class FakeRealtimeHub {
+  constructor() {
+    this.channels = new Map();
+    this.presence = new Map();
+    this.clientCount = 0;
+  }
+
+  createClient() {
+    this.clientCount++;
+    return {
+      channel: (name) => {
+        const subscribeDelay = this.clientCount === 1 ? 650 : 5;
+        const channel = new FakeRealtimeChannel(this, name, subscribeDelay);
+        if (!this.channels.has(name)) this.channels.set(name, new Set());
+        this.channels.get(name).add(channel);
+        return channel;
+      },
+    };
+  }
+
+  broadcast(sender, event, payload) {
+    for (const receiver of this.channels.get(sender.name) || []) {
+      if (receiver === sender || !receiver.subscribed) continue;
+      for (const handler of receiver.handlers) {
+        if (handler.type === 'broadcast' && handler.filter.event === event) {
+          handler.callback({ payload });
+        }
+      }
+    }
+  }
+}
+
+class FakeRealtimeChannel {
+  constructor(hub, name, subscribeDelay) {
+    this.hub = hub;
+    this.name = name;
+    this.subscribeDelay = subscribeDelay;
+    this.handlers = [];
+    this.subscribed = false;
+  }
+
+  on(type, filter, callback) {
+    this.handlers.push({ type, filter, callback });
+    return this;
+  }
+
+  subscribe(callback) {
+    setTimeout(() => {
+      this.subscribed = true;
+      callback('SUBSCRIBED');
+    }, this.subscribeDelay);
+    return this;
+  }
+
+  async track(member) {
+    this.hub.presence.set(member.id, member);
+    return 'ok';
+  }
+
+  presenceState() {
+    return Object.fromEntries(
+      Array.from(this.hub.presence, ([id, member]) => [id, [member]])
+    );
+  }
+
+  send(message) {
+    this.hub.broadcast(this, message.event, message.payload);
+    return Promise.resolve('ok');
+  }
+
+  async untrack() {}
+
+  async unsubscribe() {
+    this.subscribed = false;
+    this.hub.channels.get(this.name)?.delete(this);
+    return 'ok';
+  }
+}
+
 async function runTest() {
+  section('0. 邀請網址房間代碼解析');
+  assert(parseRoomIdFromHash('#room=7406') === '7406', '#room=7406 解析為字串 7406');
+  assert(parseRoomIdFromHash('#tab=multi&room=7406') === '7406', '帶其他 hash 參數仍正確解析房號');
+
   section('1. RoomManager 建立與雙分頁連線通訊');
   const roomId = 'room_test_' + Date.now();
 
@@ -192,9 +276,9 @@ async function runTest() {
   // 清除設定還原
   delete globalThis.window.__SUPABASE_URL__;
   delete globalThis.window.__SUPABASE_ANON_KEY__;
-  assert(mgr.getEffectiveMode() === NETWORK_MODE.BROADCAST_CHANNEL, '清除後還原為 BroadcastChannel');
+  assert(mgr.getEffectiveMode() === NETWORK_MODE.SUPABASE_REALTIME, '清除覆寫設定後仍採用專案內建多人服務設定');
   await mgr.reconfigure();
-  assert(mgr.mode === NETWORK_MODE.BROADCAST_CHANNEL, 'reconfigure 後還原為 BroadcastChannel');
+  assert(mgr.mode === NETWORK_MODE.SUPABASE_REALTIME, '清除測試覆寫後仍以專案內建多人服務為有效模式');
   delete globalThis.window;
 
   section('5. 複製邀請連結 (copyRoomInviteLink)');
@@ -516,6 +600,66 @@ async function runTest() {
 
   await hostBus.leaveRoom();
   await guestBus.leaveRoom();
+
+  section('10. 無本機快照時透過房主發現跨 Client 房間');
+  const realtimeHub = new FakeRealtimeHub();
+  globalThis.window = {
+    __SUPABASE_URL__: 'https://same-project.supabase.co',
+    __SUPABASE_ANON_KEY__: 'public-test-anon-key',
+    supabase: { createClient: (...args) => realtimeHub.createClient(...args) },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const discoveryRoomId = 'discover_' + Date.now();
+  const discoveryHost = new RoomManager();
+  const discoveryGuest = new RoomManager();
+  let requestsReceivedByHost = 0;
+  let hostGameState = null;
+  let guestGameState = null;
+  const sendSnapshotToGuest = () => {
+    requestsReceivedByHost++;
+    discoveryHost.send(MSG_TYPE.ROOM_SYNC, {
+      roomId: discoveryRoomId,
+      boardConfig: ['A_01', 'B_01', 'C_01', 'D_01'],
+      robotPositions: { red: { r: 1, c: 2 } },
+      players: [{ id: 'host-1', name: 'HostAlice', isHost: true }],
+      useSilver: true,
+      phase: 'LOBBY',
+    });
+  };
+  discoveryHost.on(MSG_TYPE.SYNC_REQUEST, sendSnapshotToGuest);
+  discoveryHost.on(MSG_TYPE.REQUEST_ROOM_SYNC, sendSnapshotToGuest);
+  const hostCreatePromise = discoveryHost.createRoom(discoveryRoomId, 'HostAlice');
+  await sleep(10);
+  const discovered = await discoverRoomSnapshot(discoveryGuest, discoveryRoomId, 'GuestBob');
+  await hostCreatePromise;
+  assert(realtimeHub.clientCount === 2, '房主與訪客建立獨立 Supabase client');
+  assert(discoveryHost.channelName === discoveryGuest.channelName, '雙方訂閱相同 room channel');
+  assert(discoveryHost.connectionStatus === 'SUBSCRIBED', '房主等待 SUBSCRIBED 後建立房間連線');
+  assert(discoveryGuest.connectionStatus === 'SUBSCRIBED', '訪客等待 SUBSCRIBED 後發出 discovery');
+  assert(
+    Object.values(discoveryGuest.channel.presenceState()).flat().some((p) => p.id === discoveryHost.userId),
+    '訪客 Presence 可見已追蹤房主'
+  );
+  assert(requestsReceivedByHost > 0, '房主收到訪客 discovery/sync request');
+  assert(discovered?.roomId === discoveryRoomId, 'Client B 透過即時通道取得相同房間');
+  assert(discovered?.boardConfig?.length === 4, 'Client B 取得房主的完整棋盤設定');
+  assert(discovered?.players?.[0]?.name === 'HostAlice', 'Client B 取得房主玩家名單');
+  assert(discovered?.useSilver === true, 'Client B 取得房間變體設定');
+  discoveryHost.on(MSG_TYPE.DEMO_MOVE, (message) => {
+    hostGameState = `${message.robotColor}:${message.direction}`;
+  });
+  discoveryGuest.on(MSG_TYPE.DEMO_MOVE, (message) => {
+    guestGameState = `${message.robotColor}:${message.direction}`;
+  });
+  discoveryHost.sendMove('red', 'right');
+  await sleep(5);
+  assert(guestGameState === 'red:right', '房主加入後的遊戲狀態更新送達訪客');
+  discoveryGuest.sendMove('blue', 'left');
+  await sleep(5);
+  assert(hostGameState === 'blue:left', '訪客加入後的遊戲狀態更新送達房主');
+  await discoveryHost.leaveRoom();
+  await discoveryGuest.leaveRoom();
 
   delete globalThis.window;
   delete globalThis.localStorage;

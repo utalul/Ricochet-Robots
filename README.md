@@ -1,11 +1,11 @@
-# 碰撞機器人 (Ricochet Robots) - 線上多人即時競標版
+# 碰撞機器人 (Ricochet Robots) - 多人獨立棋盤競速版
 
 [![Deploy to GitHub Pages](https://github.com/your-username/ricochet-robots/actions/workflows/deploy.yml/badge.svg)](https://github.com/your-username/ricochet-robots/actions/workflows/deploy.yml)
 [![Node.js CI](https://img.shields.io/badge/Node.js-v20%2B-brightgreen)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 經典益智桌遊《碰撞機器人》(Ricochet Robots / Rasende Roboter) 的多人線上網頁版遊戲。  
-採用**純靜態前端架構**，可直接部署於 **GitHub Pages**，具備「零付費、零後端伺服器」特性，並支援**至多 100 人同房即時競標與同步展示**！
+採用**純靜態前端架構**，可直接部署於 **GitHub Pages**。玩家透過房間代碼加入同一局，各自在自己的棋盤試走；房主維護玩家名單、回合與排行榜。
 
 ---
 
@@ -17,11 +17,7 @@
    - 翻開當前目標圓片（指定顏色與符號，或彩色漩渦）。
    - **個人至少轉向一次**：抵達目標的該台機器人本身移動次數必須 $\ge 2$（直達 1 步或開局已在目標格視為不合規）。
    - 若為彩色漩渦目標，任一顏色機器人皆可達陣。
-3. **多人競標流程 (4 階段狀態機)**：
-   - **THINKING（自由思考期）**：翻開新目標，棋盤全體鎖定，所有玩家只能用心算思考路線並喊出預計步數。
-   - **COUNTDOWN（60 秒沙漏期）**：首位玩家喊出步數後啟動 60 秒倒數。全體玩家可繼續挑戰更少步數（個人新下注必須小於自己前一次）。
-   - **DEMONSTRATING（路徑展示期）**：倒數結束，由宣告步數最少者（相同步數則先喊者優先）取得**獨占操作鎖 (Mutex Lock)**，其餘玩家即時觀戰。若步數剛好等於宣告值且達陣成功，獲得該圓片；若步數超過、放棄或失敗，機器人一鍵彈回起點，操作權移交次順位玩家。
-   - **ROUND_END（結算期）**：顯示本回合得主，機器人固定於當前位置，準備開啟下一輪。
+3. **多人獨立棋盤競速**：所有玩家看到相同目標與回合倒數，但每位玩家在自己的棋盤操作。有效解答會回報步數並更新排行榜；回合結束時由房主以最低步數判定得分，平手共同得分。
 
 ---
 
@@ -32,7 +28,7 @@
 | **選取機器人** | <kbd>1</kbd> 紅、<kbd>2</kbd> 藍、<kbd>3</kbd> 黃、<kbd>4</kbd> 綠 | 點擊棋盤上的機器人實心球體，或點擊右側面板按鈕 |
 | **滑動機器人** | 方向鍵 <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> 或 <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | 點擊畫面 D-Pad 按鈕、在棋盤上滑動手勢，或點擊同欄同列格子 |
 | **復原上一步** | <kbd>Z</kbd> | 點擊「↶ 復原」按鈕 |
-| **重設本回合** | <kbd>R</kbd> | 點擊「⟲ 重設」按鈕（展示者可重回起點重試） |
+| **重設本回合** | <kbd>R</kbd> | 點擊「⟲ 重設」按鈕 |
 | **下一目標** | <kbd>N</kbd> / <kbd>Enter</kbd>（彈窗時） | 點擊「下一題」按鈕 |
 | **新開隨機地圖** | <kbd>M</kbd> | 點擊「新地圖」按鈕 |
 
@@ -40,27 +36,9 @@
 
 ## 🌐 雙模式連線機制 (Dual-Mode Network)
 
-本遊戲提供雙模式自動切換機制：
+遊戲自動使用專案內建的多人連線設定，玩家不需輸入任何服務憑證：
 
-1. **本地分頁模擬 (預設零設定，BroadcastChannel)**：
-   - 無需任何金鑰或設定，只需在同一台電腦開啟 2~4 個瀏覽器分頁，輸入相同房號（例如 `101`），即可進行多人即時競標與滑動同步展示！
-2. **雲端跨裝置百人連線 (Supabase Realtime)**：
-   - 在多人連線面板點擊「**⚙️ 雲端連線設定**」，填入 Supabase 免費專案憑證，即可開啟跨手機、平板與異地電腦的 100 人即時同房連線！
-
----
-
-## 🚀 3 步驟免費申請 Supabase Realtime 金鑰
-
-1. **註冊並建立專案**：
-   - 前往 [Supabase 官網 (supabase.com)](https://supabase.com/) 免費註冊並點擊 **"New Project"**。
-2. **取得 Project API 憑證**：
-   - 進入專案後點擊左側齒輪 **Project Settings** $\rightarrow$ **API**。
-   - 複製 **Project URL**（格式如 `https://xxxx.supabase.co`）。
-   - 複製 **Project API keys** 中的 `anon` `public` 金鑰。
-3. **在遊戲中儲存設定**：
-   - 開啟遊戲網頁，切換至 **【🌐 多人即時連線】** $\rightarrow$ 點擊 **【⚙️ 雲端連線設定】**。
-   - 貼上 Project URL 與 Anon Key 並點擊「**儲存並套用**」。
-   - 設定儲存於瀏覽器 `localStorage`，無需重新打包部署！
+建立房間後分享代碼或邀請連結，其他玩家輸入暱稱即可加入。連線服務不可用時，遊戲會提示跨裝置多人暫時無法使用；BroadcastChannel 僅支援同瀏覽器分頁。
 
 ---
 
