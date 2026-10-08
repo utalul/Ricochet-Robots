@@ -604,9 +604,6 @@ export class MultiplayerHUD {
       this.setRoomCode('');
       this.setVariant(false);
       this.stopTimer();
-      if (history.replaceState) {
-        history.replaceState(null, '', window.location.pathname);
-      }
     }
   }
 
