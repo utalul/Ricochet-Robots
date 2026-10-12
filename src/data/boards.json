@@ -200,12 +200,12 @@
           "edge": "bottom"
         },
         {
-          "x": 2,
+          "x": 3,
           "y": 1,
           "edge": "left"
         },
         {
-          "x": 2,
+          "x": 3,
           "y": 1,
           "edge": "top"
         },
@@ -240,7 +240,7 @@
           "shape": "star"
         },
         {
-          "x": 2,
+          "x": 3,
           "y": 1,
           "color": "green",
           "shape": "gear"
