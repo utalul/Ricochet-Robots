@@ -185,6 +185,12 @@ export class MultiplayerHUD {
               變體模式：<strong id="mp-lobby-variant-text" style="color: var(--accent);">標準 4 色模式</strong>
             </div>
 
+            <!-- 非房主加入成功等待提示橫幅 -->
+            <div id="mp-lobby-guest-banner" class="guest-waiting-banner" style="display: none; padding: 12px 14px; margin: 10px 0; background: rgba(79, 195, 247, 0.12); border: 1px solid rgba(79, 195, 247, 0.35); border-radius: 8px; text-align: center;">
+              <div style="font-size: 1.02rem; font-weight: 700; color: #4fc3f7; margin-bottom: 4px;">✅ 已成功加入房間！</div>
+              <div style="font-size: 0.85rem; color: #b0bec5; line-height: 1.4;">目前處於大廳等待室，請等待房主點擊「開始遊戲」即可同步展開 120 秒競速！</div>
+            </div>
+
             <!-- 大廳控制按鈕 -->
             <div class="lobby-controls">
               <button type="button" id="btn-lobby-start-game" class="btn-large-start" style="display: none;">
@@ -283,6 +289,7 @@ export class MultiplayerHUD {
     this.lobbyUseSilver = this.container.querySelector('#mp-lobby-use-silver');
     this.lobbyGuestVariant = this.container.querySelector('#mp-lobby-guest-variant');
     this.lobbyVariantText = this.container.querySelector('#mp-lobby-variant-text');
+    this.lobbyGuestBanner = this.container.querySelector('#mp-lobby-guest-banner');
     this.btnLobbyStartGame = this.container.querySelector('#btn-lobby-start-game');
     this.btnLobbyWaiting = this.container.querySelector('#btn-lobby-waiting');
 
@@ -318,7 +325,7 @@ export class MultiplayerHUD {
     });
 
     // 加入房間
-    this.container.querySelector('#btn-join-room').addEventListener('click', () => {
+    this.container.querySelector('#btn-join-room').addEventListener('click', async () => {
       const name = this._saveAndGetName();
       const roomId = this.inputRoom.value.trim();
       if (!roomId) {
@@ -326,7 +333,20 @@ export class MultiplayerHUD {
         return;
       }
       const cleanRoomId = roomId.replace(/[^a-zA-Z0-9]/g, '');
-      this._call('joinRoom', { roomId: cleanRoomId, userName: name });
+      const btn = this.container.querySelector('#btn-join-room');
+      const originalText = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '連線加入中…';
+      }
+      try {
+        await this._call('joinRoom', { roomId: cleanRoomId, userName: name });
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText || '加入房間';
+        }
+      }
     });
 
     // 複製邀請連結 (頂部按鈕與大廳卡片按鈕)
@@ -579,6 +599,7 @@ export class MultiplayerHUD {
     if (this.currentPhase === ROOM_PHASE.LOBBY) {
       if (this.btnLobbyStartGame) this.btnLobbyStartGame.style.display = isHost ? 'block' : 'none';
       if (this.btnLobbyWaiting) this.btnLobbyWaiting.style.display = isHost ? 'none' : 'block';
+      if (this.lobbyGuestBanner) this.lobbyGuestBanner.style.display = isHost ? 'none' : 'block';
       if (this.lobbyHostVariant) this.lobbyHostVariant.style.display = isHost ? 'block' : 'none';
       if (this.lobbyGuestVariant) this.lobbyGuestVariant.style.display = isHost ? 'none' : 'block';
     }
@@ -619,6 +640,7 @@ export class MultiplayerHUD {
       const isHost = Boolean(this.roomInfo?.isHost);
       if (this.btnLobbyStartGame) this.btnLobbyStartGame.style.display = isHost ? 'block' : 'none';
       if (this.btnLobbyWaiting) this.btnLobbyWaiting.style.display = isHost ? 'none' : 'block';
+      if (this.lobbyGuestBanner) this.lobbyGuestBanner.style.display = isHost ? 'none' : 'block';
       if (this.lobbyHostVariant) this.lobbyHostVariant.style.display = isHost ? 'block' : 'none';
       if (this.lobbyGuestVariant) this.lobbyGuestVariant.style.display = isHost ? 'none' : 'block';
       return;

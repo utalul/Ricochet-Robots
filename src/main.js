@@ -1133,8 +1133,8 @@ function setupMultiplayerNetwork() {
   roomManager.on(MSG_TYPE.ROOM_PLAYERS_SYNC, (message) => {
     const payload = message.payload || message;
     const sourceHostId = payload.hostPlayerId || message.senderId;
-    if (!roomState.hostPlayerId || sourceHostId !== roomState.hostPlayerId || message.senderId !== roomState.hostPlayerId) return;
-    applyRoomPlayers(payload.players, { hostPlayerId: sourceHostId, status: payload.status });
+    if (roomState.hostPlayerId && sourceHostId && sourceHostId !== roomState.hostPlayerId) return;
+    applyRoomPlayers(payload.players, { hostPlayerId: sourceHostId || roomState.hostPlayerId, status: payload.status });
   });
 
   roomManager.on(MSG_TYPE.PLAYER_KICK, async (message) => {
@@ -1630,11 +1630,29 @@ function setupMultiplayerNetwork() {
     });
   }
 
-  // 9. 監聽 Supabase Presence 即時名單同步 (跨設備 / 雙分頁 100% 同步)
+  // 9. 監聽 Firebase / Supabase Presence 即時名單同步 (跨設備 / 雙分頁 100% 同步)
   roomManager.on('presence_sync', ({ members }) => {
     console.log('[Presence Sync] Members received:', members);
     if (!Array.isArray(members) || members.length === 0) return;
-    // Presence is transport liveness only. Room roster membership is host-controlled.
+    if (roomManager.isHost) {
+      let changed = false;
+      for (const m of members) {
+        if (!roomState.getPlayer(m.id)) {
+          roomState.addPlayer({
+            id: m.id,
+            nickname: m.name || '玩家',
+            isHost: Boolean(m.isHost),
+            connected: true,
+          });
+          changed = true;
+          showToast(`👋 玩家【${m.name || '玩家'}】加入了房間！`, 'info', 2000);
+        }
+      }
+      if (changed) {
+        broadcastRoomPlayers();
+        updateRoomSnapshot();
+      }
+    }
     const liveIds = new Set(members.map((m) => m.id));
     let connectivityChanged = false;
     for (const player of roomState.getPlayerList()) {
@@ -2060,32 +2078,29 @@ async function handleGuestJoin(roomId, userName) {
 
   if (!Array.isArray(roomData.players)) roomData.players = [];
   const existingIdx = roomData.players.findIndex((p) => (p.playerId || p.id) === myUserId);
-  if (connectedByDiscovery) {
-    // Cloud roster changes are host-owned; wait for its broadcast to include this client.
-  } else if (existingIdx >= 0) {
-    roomData.players[existingIdx].id = myUserId;
-    roomData.players[existingIdx].name = myUserName;
-    roomData.players[existingIdx].isHost = false;
-    roomData.players[existingIdx].connected = true;
+  const guestEntry = {
+    id: myUserId,
+    playerId: myUserId,
+    name: myUserName,
+    nickname: myUserName,
+    isHost: false,
+    score: 0,
+    connected: true,
+    joinedAt: Date.now(),
+  };
+
+  if (existingIdx >= 0) {
+    roomData.players[existingIdx] = { ...roomData.players[existingIdx], ...guestEntry };
   } else {
-    roomData.players.push({
-      id: myUserId,
-      playerId: myUserId,
-      name: myUserName,
-      nickname: myUserName,
-      isHost: false,
-      score: 0,
-      connected: true,
-      joinedAt: Date.now(),
-    });
+    roomData.players.push(guestEntry);
   }
 
-  if (!connectedByDiscovery) {
-    // Local mode writes to the same browser's room cache; the host merges this identity.
-    try {
-      localStorage.setItem(key, JSON.stringify(roomData));
-    } catch {}
-  }
+  try {
+    localStorage.setItem(key, JSON.stringify(roomData));
+    localStorage.setItem(`RR_ROOM_${cleanId}`, JSON.stringify(roomData));
+    localStorage.setItem(`rr_snapshot_${cleanId}`, JSON.stringify(roomData));
+    localStorage.setItem(`rr_room_state_${cleanId}`, JSON.stringify(roomData));
+  } catch {}
 
   roomState.hostPlayerId = roomData.hostPlayerId || roomData.hostId || roomData.players.find((p) => p.isHost)?.id || null;
   roomState.roomCode = cleanId;
@@ -2094,21 +2109,12 @@ async function handleGuestJoin(roomId, userName) {
     hostPlayerId: roomState.hostPlayerId,
     status: roomState.status,
   });
-  if (connectedByDiscovery) {
-    // The host is the only roster writer. A joining client announces itself and waits for
-    // the host's authoritative ROOM_PLAYERS_SYNC before exposing a final player list.
-    roomManager.send(MSG_TYPE.PLAYER_JOIN, {
-      player: { id: myUserId, playerId: myUserId, name: myUserName, nickname: myUserName, isHost: false },
-      user: { id: myUserId, name: myUserName },
-    });
-  }
 
   // 4. 連線至房間並登記在線名單
   let connMode = roomManager.mode || '🌐 即時多人連線';
   try {
     if (roomManager) {
-      if (connectedByDiscovery && roomManager.roomId === cleanId) {
-        // discoverRoomSnapshot 已完成 connect 與 Firebase 監聽綁定，不需重複 joinRoom 銷毀重連
+      if (roomManager.roomId === cleanId && roomManager.connectionStatus === 'SUBSCRIBED') {
         connMode = roomManager.mode;
       } else {
         const conn = await roomManager.joinRoom(cleanId, myUserName);
@@ -2144,6 +2150,7 @@ async function handleGuestJoin(roomId, userName) {
       elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
     }
     mpHUD.updatePhase(ROOM_PHASE.LOBBY);
+    showToast(`✅ 已成功加入房間【${cleanId}】！等待房主開啟比賽…`, 'success', 3500);
   } else {
     applyRoundDataToGuest(roomData);
   }
@@ -2151,7 +2158,7 @@ async function handleGuestJoin(roomId, userName) {
   // 廣播加入訊息通知房主
   try {
     const joinMsg = {
-      player: { id: myUserId, name: myUserName, isHost: false },
+      player: guestEntry,
       user: { id: myUserId, name: myUserName },
       players: roomState.getPlayerList(),
     };
@@ -2160,8 +2167,6 @@ async function handleGuestJoin(roomId, userName) {
   } catch (e) {}
 
   if (!cloudConfigured) startGuestPolling(cleanId);
-
-  showToast(`成功加入房間【${cleanId}】！等待房主開局 🎮`, 'success');
   return true;
 }
 
@@ -2316,7 +2321,12 @@ async function init() {
           }
         },
         joinRoom: async ({ roomId, userName }) => {
-          await joinRoomWithRetry(roomId, userName);
+          try {
+            await joinRoomWithRetry(roomId, userName);
+          } catch (err) {
+            console.error('加入房間失敗:', err);
+            showToast('加入房間失敗：' + (err.message || '請確認房號與網路連線'), 'warn');
+          }
         },
         leaveRoom: async () => {
           stopSyncRetry();
@@ -2433,13 +2443,30 @@ async function init() {
         move: (dir) => handleMove(dir),
         undo: () => handleUndo(),
         reset: () => handleReset(),
-        next: () => handleNextRound(),
-        newGame: () => handleNewGame(),
-        confirm: () => {
-          if (isSoloModalOpen) handleNextRound();
-          if (currentMode === 'multi' && roomManager.isHost && !elRoundModal?.hasAttribute('hidden')) {
-            handleNextRound();
+        next: () => {
+          if (currentMode === 'multi') {
+            if (!roomManager.isHost) {
+              showToast('只有房主可以開啟下一輪比賽', 'info');
+              return;
+            }
           }
+          handleNextRound();
+        },
+        newGame: () => {
+          if (currentMode === 'multi') {
+            showToast('多人比賽進行中無法重置地圖', 'info');
+            return;
+          }
+          handleNewGame();
+        },
+        confirm: () => {
+          if (currentMode === 'multi') {
+            if (roomManager.isHost && !elRoundModal?.hasAttribute('hidden')) {
+              handleNextRound();
+            }
+            return;
+          }
+          if (isSoloModalOpen) handleNextRound();
         },
         cancel: () => {
           if (isSoloModalOpen) hideSoloModal();

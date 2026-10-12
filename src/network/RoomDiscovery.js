@@ -19,6 +19,8 @@ function normalizeSnapshot(originalRoomId, data) {
     phase: data.phase || snapshot.phase || 'LOBBY',
     round: data.round || snapshot.round || 0,
     target: data.target || snapshot.target || null,
+    countdownEnd: data.countdownEnd || snapshot.countdownEnd || null,
+    countdownDuration: data.countdownDuration || snapshot.countdownDuration || 120,
   };
 }
 
@@ -28,9 +30,11 @@ export async function discoverRoomSnapshot(roomManager, roomId, userName, { time
 
   // 1. 優先直接自雲端（Firebase）或快取讀取
   try {
-    const directSnap = await roomManager.fetchRoomSnapshot(roomId);
-    const normalized = normalizeSnapshot(roomId, directSnap);
+    const directSnap = await roomManager.fetchRoomSnapshot(cleanId);
+    const normalized = normalizeSnapshot(cleanId, directSnap);
     if (normalized) {
+      // 關鍵修復：取得快照後，訪客必須立即連線並訂閱 Firebase 通道與 Presence
+      await roomManager.connect(cleanId, userName, false);
       return normalized;
     }
   } catch (err) {
@@ -59,7 +63,7 @@ export async function discoverRoomSnapshot(roomManager, roomId, userName, { time
   });
 
   try {
-    await roomManager.connect(String(roomId), userName, false);
+    await roomManager.connect(cleanId, userName, false);
 
     const sendDiscoveryRequest = async () => {
       roomManager.send(MSG_TYPE.REQUEST_ROOM_SYNC, {
@@ -67,8 +71,8 @@ export async function discoverRoomSnapshot(roomManager, roomId, userName, { time
       });
       // 同步重試遠端讀取（防短暫延遲）
       try {
-        const snap = await roomManager.fetchRoomSnapshot(roomId);
-        const norm = normalizeSnapshot(roomId, snap);
+        const snap = await roomManager.fetchRoomSnapshot(cleanId);
+        const norm = normalizeSnapshot(cleanId, snap);
         if (norm && settle) {
           settle(norm);
         }
