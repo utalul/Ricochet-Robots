@@ -1240,6 +1240,17 @@ function setupMultiplayerNetwork() {
     }
 
     // (G) 階段與介面切換
+    if (!mpHUD.inRoom) {
+      mpHUD.setInRoom(true, {
+        roomId: roomState.roomId || roomManager.roomId,
+        userId: roomManager.userId,
+        userName: roomManager.userName,
+        isHost: roomManager.isHost,
+        useSilver: roomState.useSilver,
+        mode: roomManager.mode,
+      });
+    }
+
     if (roomState.phase === ROOM_PHASE.LOBBY) {
       renderer.setTarget(null);
       if (roomState.initialRobots) {
@@ -1249,7 +1260,7 @@ function setupMultiplayerNetwork() {
         elTargetIcon.innerHTML = '<span style="font-size: 1.8rem;">⏳</span>';
       }
       if (elTargetText) {
-        elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主開始遊戲...</span>';
+        elTargetText.innerHTML = '<span style="color: var(--muted);">等待房主點擊「開始遊戲」</span>';
       }
       mpHUD.updatePhase(ROOM_PHASE.LOBBY);
     } else {
@@ -1347,6 +1358,16 @@ function setupMultiplayerNetwork() {
   roomManager.on(MSG_TYPE.START_GAME, (message) => {
     if (message.senderId !== roomState.hostPlayerId) return;
     const payload = message.payload || message;
+    if (!mpHUD.inRoom) {
+      mpHUD.setInRoom(true, {
+        roomId: roomState.roomId || roomManager.roomId,
+        userId: roomManager.userId,
+        userName: roomManager.userName,
+        isHost: roomManager.isHost,
+        useSilver: roomState.useSilver,
+        mode: roomManager.mode,
+      });
+    }
     if (payload.gamePlayers || payload.players) {
       applyRoomPlayers(payload.gamePlayers || payload.players, {
         hostPlayerId: payload.hostPlayerId,
@@ -1429,6 +1450,16 @@ function setupMultiplayerNetwork() {
   roomManager.on(MSG_TYPE.NEW_ROUND, (message) => {
     if (message.senderId !== roomState.hostPlayerId) return;
     const payload = message.payload || message;
+    if (!mpHUD.inRoom) {
+      mpHUD.setInRoom(true, {
+        roomId: roomState.roomId || roomManager.roomId,
+        userId: roomManager.userId,
+        userName: roomManager.userName,
+        isHost: roomManager.isHost,
+        useSilver: roomState.useSilver,
+        mode: roomManager.mode,
+      });
+    }
     if (payload.grid && !currentGrid) currentGrid = payload.grid;
     if (payload.players) applyRoomPlayers(payload.players, { hostPlayerId: payload.hostPlayerId, status: payload.status });
     if (payload.grid && !currentGrid) currentGrid = payload.grid;
@@ -2076,8 +2107,13 @@ async function handleGuestJoin(roomId, userName) {
   let connMode = roomManager.mode || '🌐 即時多人連線';
   try {
     if (roomManager) {
-      const conn = await roomManager.joinRoom(cleanId, myUserName);
-      if (conn?.mode) connMode = conn.mode;
+      if (connectedByDiscovery && roomManager.roomId === cleanId) {
+        // discoverRoomSnapshot 已完成 connect 與 Firebase 監聽綁定，不需重複 joinRoom 銷毀重連
+        connMode = roomManager.mode;
+      } else {
+        const conn = await roomManager.joinRoom(cleanId, myUserName);
+        if (conn?.mode) connMode = conn.mode;
+      }
     }
   } catch (netErr) {
     console.warn('網路連線警示，維持運作:', netErr);
@@ -2256,13 +2292,17 @@ async function init() {
 
             showToast(`房間【${cleanRoomId}】建立成功！等待玩家加入大廳 👑`, 'success');
 
-            // 2. 網路或 Supabase 連線必須以獨立 try...catch 包裹，絕不可中斷主流程
+            // 2. 網路或雲端連線必須以獨立 try...catch 包裹，絕不可中斷主流程
             try {
               if (roomManager) {
                 const connection = await roomManager.connect(cleanRoomId, myUserName, true);
                 info.mode = connection.mode;
                 mpHUD.setInRoom(true, info);
-                if (connection.mode !== NETWORK_MODE.SUPABASE_REALTIME) {
+                // 連線建立後立即上傳快照至 Firebase，確保訪客跨裝置秒查得到
+                if (typeof roomManager.saveRoomSnapshot === 'function') {
+                  await roomManager.saveRoomSnapshot(payload);
+                }
+                if (connection.mode === NETWORK_MODE.BROADCAST_CHANNEL) {
                   showToast('目前只能在同一瀏覽器分頁連線，跨裝置多人服務暫時無法使用', 'warn', 5000);
                   startHostPolling(cleanRoomId);
                 }

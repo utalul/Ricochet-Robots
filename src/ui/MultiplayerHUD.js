@@ -498,8 +498,19 @@ export class MultiplayerHUD {
     this.roomInfo = info;
     if (info?.userId) this.currentUserId = info.userId;
 
-    this.lobbyCard.hidden = inRoom;
-    this.roomCard.hidden = !inRoom;
+    // 顯式透過 hidden 與 style.display 雙重保證面板切換
+    if (this.mpSection) {
+      this.mpSection.hidden = false;
+      this.mpSection.style.display = 'flex';
+    }
+    if (this.lobbyCard) {
+      this.lobbyCard.hidden = inRoom;
+      this.lobbyCard.style.display = inRoom ? 'none' : 'block';
+    }
+    if (this.roomCard) {
+      this.roomCard.hidden = !inRoom;
+      this.roomCard.style.display = inRoom ? 'block' : 'none';
+    }
 
     if (inRoom && info) {
       const code = info.roomId ? String(info.roomId) : '';
@@ -509,8 +520,10 @@ export class MultiplayerHUD {
           ? '🌐 即時多人連線'
           : '⚡ 本機分頁連線';
       this.setVariant(Boolean(info.useSilver));
-      if (history.replaceState && code) {
-        history.replaceState(null, '', `#room=${code}`);
+      if (typeof window !== 'undefined' && code) {
+        if (window.location.hash !== `#room=${code}`) {
+          window.location.hash = `#room=${code}`;
+        }
       }
       this.updatePhase(this.currentPhase || 'LOBBY');
     } else {
@@ -647,7 +660,10 @@ export class MultiplayerHUD {
   startTimer(countdownEnd, durationSec = 120) {
     this._countdownEnd = countdownEnd;
     this._totalSeconds = durationSec;
-    this.timerWrap.hidden = false;
+    if (this.timerWrap) {
+      this.timerWrap.hidden = false;
+      this.timerWrap.style.display = 'block';
+    }
 
     this.stopTimer();
     const tick = () => {
